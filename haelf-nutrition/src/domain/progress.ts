@@ -42,6 +42,32 @@ export function remainingKcal(consumed: number, goal: number | null | undefined)
   return goal - consumed;
 }
 
+import { addLocalDays, localDateGapDays, localDateRangeEnding } from './dates';
+
+export type WeeklyWeightPoint = { label: string; value: number | null };
+
+/** Rolling 7-day weekly averages, oldest → newest (default 12 weeks ≈ 3 months). */
+export function rollingWeeklyWeightAverages(
+  dailyKg: Map<string, number>,
+  endDate: string,
+  weekCount = 12
+): WeeklyWeightPoint[] {
+  const points: WeeklyWeightPoint[] = [];
+  for (let i = 0; i < weekCount; i++) {
+    const weekEnd = addLocalDays(endDate, -(weekCount - 1 - i) * 7);
+    const days = localDateRangeEnding(weekEnd, 7);
+    const values = days.map((d) => dailyKg.get(d)).filter((v): v is number => v != null);
+    const avg = values.length ? values.reduce((sum, kg) => sum + kg, 0) / values.length : null;
+    points.push({
+      label: days[0].slice(5).replace('-', '/'),
+      value: avg,
+    });
+  }
+  const firstWithData = points.findIndex((p) => p.value != null);
+  if (firstWithData === -1) return [];
+  return points.slice(firstWithData);
+}
+
 export function splitContinuousSegments<T>(points: (T | null)[]): T[][] {
   const segments: T[][] = [];
   let current: T[] = [];
@@ -55,4 +81,41 @@ export function splitContinuousSegments<T>(points: (T | null)[]): T[][] {
   }
   if (current.length) segments.push(current);
   return segments;
+}
+
+/** Index ranges for line segments; breaks on null values or calendar gaps > maxDayGap. */
+export function splitTrendLineIndices(
+  points: { label: string; value: number | null }[],
+  maxDayGap = 1
+): number[][] {
+  const segments: number[][] = [];
+  let current: number[] = [];
+
+  for (let i = 0; i < points.length; i++) {
+    if (points[i].value == null) {
+      if (current.length) segments.push(current);
+      current = [];
+      continue;
+    }
+    if (current.length > 0) {
+      const prev = points[current[current.length - 1]];
+      if (localDateGapDays(prev.label, points[i].label) > maxDayGap) {
+        segments.push(current);
+        current = [];
+      }
+    }
+    current.push(i);
+  }
+  if (current.length) segments.push(current);
+  return segments;
+}
+
+/** One continuous line through all recorded points (skips null slots on the axis). */
+export function recordedTrendLineIndices(points: { value: number | null }[]): number[][] {
+  const indices: number[] = [];
+  for (let i = 0; i < points.length; i++) {
+    if (points[i].value != null) indices.push(i);
+  }
+  if (indices.length < 2) return indices.length ? [indices] : [];
+  return [indices];
 }

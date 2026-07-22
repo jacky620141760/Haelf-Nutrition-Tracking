@@ -32,6 +32,11 @@ export function isSupabaseConfigured(): boolean {
   return Boolean(url && anonKey && !url.includes('YOUR_PROJECT'));
 }
 
+export function getSupabasePublicConfig(): { url: string; anonKey: string } | null {
+  if (!isSupabaseConfigured()) return null;
+  return { url, anonKey };
+}
+
 export const supabase = createClient(url || 'https://placeholder.supabase.co', anonKey || 'placeholder', {
   auth: {
     storage: ExpoSecureStoreAdapter,

@@ -168,9 +168,7 @@ export default function EditFoodScreen() {
       />
       {preview ? (
         <Text style={styles.preview}>
-          {zhTW.diary.intake}：{displayNutrients(preview).kcal} kcal · P
-          {displayNutrients(preview).protein_g} F{displayNutrients(preview).fat_g} C
-          {displayNutrients(preview).carbs_g}
+          {zhTW.diary.intake}：{displayNutrients(preview).kcal} kcal
         </Text>
       ) : null}
       {warnings.length ? (

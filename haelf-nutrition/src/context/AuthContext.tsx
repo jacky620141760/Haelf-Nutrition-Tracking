@@ -19,6 +19,7 @@ import {
   supabase,
 } from '../services/auth/client';
 import { clearBoundUser, getBoundUserId, runFullSync } from '../services/sync/engine';
+import { setSyncRunner } from '../services/sync/scheduler';
 import { hasOngoingGoals } from '../db/repositories/goals';
 import { clearAllAppTables } from '../db/database';
 import {
@@ -29,6 +30,7 @@ import {
   isStepsOnboardingPending,
   startPostSignupOnboarding,
 } from '../services/onboarding';
+import { useApp } from './AppContext';
 
 type AuthContextValue = {
   loading: boolean;
@@ -53,6 +55,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const { reloadFromDb } = useApp();
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
   const [needsGoalsSetup, setNeedsGoalsSetup] = useState(false);
@@ -86,9 +89,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLastSyncError(null);
     const result = await runFullSync(userId);
     if (!result.ok) setLastSyncError(result.message);
+    else await reloadFromDb();
     await refreshOnboardingGate();
     setSyncing(false);
-  }, [session?.user?.id, refreshOnboardingGate]);
+  }, [session?.user?.id, refreshOnboardingGate, reloadFromDb]);
 
   const bindAccount = useCallback(
     async (userId: string) => {
@@ -101,12 +105,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSyncing(true);
       const result = await runFullSync(userId);
       if (!result.ok) setLastSyncError(result.message);
-      else setLastSyncError(null);
+      else {
+        setLastSyncError(null);
+        await reloadFromDb();
+      }
       await refreshOnboardingGate();
       setSyncing(false);
     },
-    [refreshOnboardingGate]
+    [refreshOnboardingGate, reloadFromDb]
   );
+
+  useEffect(() => {
+    if (!session?.user) {
+      setSyncRunner(null);
+      return;
+    }
+    setSyncRunner(() => syncNow);
+    return () => setSyncRunner(null);
+  }, [session?.user, syncNow]);
 
   useEffect(() => {
     let mounted = true;

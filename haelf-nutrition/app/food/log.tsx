@@ -1,17 +1,19 @@
-import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import NetInfo from '@react-native-community/netinfo';
 import type { FoodCatalogItem, MealType, Recipe, SavedMeal } from '@/src/domain/types';
 import { listCatalog, listFavorites, listRecent } from '@/src/db/repositories/food';
 import { listSavedMeals } from '@/src/db/repositories/savedMeals';
 import { listRecipes } from '@/src/db/repositories/recipes';
 import { setPendingDraft } from '@/src/services/draftStore';
+import { searchOpenFoodFacts, type OffSearchHit } from '@/src/services/off';
 import { MealPicker } from '@/src/components/Pickers';
 import { MfpCard, SectionTitle } from '@/src/components/ui';
 import { useApp } from '@/src/context/AppContext';
 import { theme } from '@/src/theme';
 
-type Tab = 'history' | 'foods' | 'meals' | 'recipes';
+type Tab = 'history' | 'foods' | 'database' | 'meals' | 'recipes';
 
 export default function FoodLogScreen() {
   const router = useRouter();
@@ -27,6 +29,10 @@ export default function FoodLogScreen() {
   const [foods, setFoods] = useState<FoodCatalogItem[]>([]);
   const [meals, setMeals] = useState<SavedMeal[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [dbHits, setDbHits] = useState<OffSearchHit[]>([]);
+  const [dbLoading, setDbLoading] = useState(false);
+  const [dbError, setDbError] = useState('');
+  const searchController = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
     const [favorites, recent, catalog, saved, recipeList] = await Promise.all([
@@ -44,6 +50,63 @@ export default function FoodLogScreen() {
   }, [search]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load, refreshToken]));
+
+  useEffect(() => {
+    if (tab !== 'database') return;
+    const trimmed = search.trim();
+    if (trimmed.length < 2) {
+      searchController.current?.abort();
+      setDbHits([]);
+      setDbError('');
+      setDbLoading(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void (async () => {
+        searchController.current?.abort();
+        const controller = new AbortController();
+        searchController.current = controller;
+        setDbLoading(true);
+        setDbError('');
+        const net = await NetInfo.fetch();
+        if (!net.isConnected) {
+          setDbLoading(false);
+          setDbHits([]);
+          setDbError(t('foodHub.offlineDatabase'));
+          return;
+        }
+        const result = await searchOpenFoodFacts(trimmed, meal, controller.signal);
+        if (controller.signal.aborted) return;
+        setDbLoading(false);
+        if (!result.ok) {
+          if (result.reason === 'cancelled') return;
+          setDbHits([]);
+          setDbError(
+            result.reason === 'server_busy'
+              ? t('foodHub.serverBusy')
+              : result.reason === 'timeout'
+                ? t('foodHub.searchTimeout')
+                : result.reason === 'unavailable'
+                  ? t('foodHub.searchUnavailable')
+                  : /failed to fetch/i.test(result.message)
+                    ? t('foodHub.searchNetwork')
+                    : result.message
+          );
+          return;
+        }
+        setDbHits(result.hits);
+        if (!result.hits.length) setDbError(t('foodHub.noDatabaseResults'));
+      })();
+    }, 500);
+
+    return () => {
+      clearTimeout(timer);
+      searchController.current?.abort();
+    };
+  }, [search, tab, meal, t]);
+
+  useEffect(() => () => searchController.current?.abort(), []);
 
   const selectFood = (item: FoodCatalogItem) => {
     setPendingDraft({
@@ -63,6 +126,11 @@ export default function FoodLogScreen() {
     router.push(`/food/add?meal=${meal}` as never);
   };
 
+  const selectDatabaseHit = (hit: OffSearchHit) => {
+    setPendingDraft({ ...hit.draft, mealType: meal });
+    router.push(`/food/add?meal=${meal}` as never);
+  };
+
   const filteredHistory = useMemo(
     () => history.filter((item) => item.name.toLowerCase().includes(search.toLowerCase())),
     [history, search]
@@ -76,7 +144,7 @@ export default function FoodLogScreen() {
       <TextInput
         value={search}
         onChangeText={setSearch}
-        placeholder={t('common.search')}
+        placeholder={tab === 'database' ? t('foodHub.databaseHint') : t('common.search')}
         placeholderTextColor={theme.colors.textMute}
         style={styles.search}
       />
@@ -92,10 +160,11 @@ export default function FoodLogScreen() {
           </Pressable>
         ))}
       </View>
-      <View style={styles.tabs}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroll} contentContainerStyle={styles.tabs}>
         {([
           ['history', t('foodHub.history')],
           ['foods', t('foodHub.myFoods')],
+          ['database', t('foodHub.database')],
           ['meals', t('foodHub.meals')],
           ['recipes', t('foodHub.recipes')],
         ] as const).map(([key, label]) => (
@@ -103,8 +172,30 @@ export default function FoodLogScreen() {
             <Text style={[styles.tabText, tab === key && styles.tabTextOn]}>{label}</Text>
           </Pressable>
         ))}
-      </View>
-      {(tab === 'history' || tab === 'foods')
+      </ScrollView>
+
+      {tab === 'database' ? (
+        <>
+          {search.trim().length < 2 ? (
+            <Text style={styles.hint}>{t('foodHub.searchMinChars')}</Text>
+          ) : null}
+          {dbLoading ? (
+            <View style={styles.centered}>
+              <ActivityIndicator color={theme.colors.lakeBlue} />
+              <Text style={styles.hint}>{t('foodHub.searching')}</Text>
+            </View>
+          ) : null}
+          {dbError ? <Text style={styles.error}>{dbError}</Text> : null}
+          {dbHits.map((hit) => (
+            <MfpCard key={hit.barcode}>
+              <Pressable onPress={() => selectDatabaseHit(hit)} accessibilityRole="button">
+                <Text style={styles.name}>{hit.name}</Text>
+                <Text style={styles.meta}>{hit.nutritionLabel}</Text>
+              </Pressable>
+            </MfpCard>
+          ))}
+        </>
+      ) : (tab === 'history' || tab === 'foods')
         ? visibleFoods.map((item) => (
             <MfpCard key={item.id}>
               <Pressable onPress={() => selectFood(item)} accessibilityRole="button">
@@ -141,11 +232,15 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm, marginBottom: theme.space.md },
   action: { width: '48%', minHeight: theme.minTouch, borderRadius: theme.radius, backgroundColor: theme.colors.skyBlue, alignItems: 'center', justifyContent: 'center' },
   actionText: { color: theme.colors.lakeBlue, fontWeight: '700', textAlign: 'center' },
-  tabs: { flexDirection: 'row', marginBottom: theme.space.md },
-  tab: { flex: 1, minHeight: theme.minTouch, justifyContent: 'center', alignItems: 'center', borderBottomWidth: 2, borderBottomColor: theme.colors.border },
+  tabScroll: { marginBottom: theme.space.md, flexGrow: 0 },
+  tabs: { flexDirection: 'row', gap: theme.space.sm, paddingRight: theme.space.md },
+  tab: { minHeight: theme.minTouch, paddingHorizontal: theme.space.md, justifyContent: 'center', alignItems: 'center', borderBottomWidth: 2, borderBottomColor: theme.colors.border },
   tabOn: { borderBottomColor: theme.colors.lakeBlue },
   tabText: { color: theme.colors.textMuted, fontSize: 12, fontWeight: '600' },
   tabTextOn: { color: theme.colors.lakeBlue },
   name: { color: theme.colors.text, fontWeight: '700' },
   meta: { color: theme.colors.textMuted, marginTop: 4 },
+  hint: { color: theme.colors.textMuted, textAlign: 'center', marginVertical: theme.space.md },
+  error: { color: theme.colors.danger, textAlign: 'center', marginBottom: theme.space.md },
+  centered: { alignItems: 'center', gap: theme.space.sm, marginVertical: theme.space.md },
 });

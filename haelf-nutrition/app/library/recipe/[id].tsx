@@ -61,7 +61,7 @@ export default function RecipeDetailScreen() {
       ))}
       {perServing ? (
         <Text style={styles.summary}>
-          {Math.round(perServing.kcal)} kcal · P{perServing.protein_g.toFixed(1)} F{perServing.fat_g.toFixed(1)} C{perServing.carbs_g.toFixed(1)}
+          {Math.round(perServing.kcal)} kcal
         </Text>
       ) : null}
       <MealPicker value={meal} onChange={setMeal} />

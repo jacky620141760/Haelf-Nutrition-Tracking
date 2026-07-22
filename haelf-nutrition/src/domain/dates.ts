@@ -61,6 +61,12 @@ export function compareLocalDates(a: string, b: string): number {
   return 0;
 }
 
+/** Inclusive calendar-day distance between two YYYY-MM-DD strings. */
+export function localDateGapDays(a: string, b: string): number {
+  const ms = Math.abs(parseLocalDateToDate(a).getTime() - parseLocalDateToDate(b).getTime());
+  return Math.round(ms / 86_400_000);
+}
+
 export type EntryTimeMetadata = {
   utcTimestamp: string;
   localDate: string;

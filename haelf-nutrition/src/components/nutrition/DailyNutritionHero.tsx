@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
-import { displayKcal, displayMacroG } from '@/src/domain/nutrition';
+import { displayKcal } from '@/src/domain/nutrition';
 import {
   calorieRingColor,
   calorieRingSemantic,
@@ -9,14 +9,9 @@ import {
 import type { Nutrients } from '@/src/domain/types';
 import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
-import { MacroMiniRing, ProgressRing } from './ProgressRing';
+import { ProgressRing } from './ProgressRing';
 
-type Goals = {
-  kcal: number;
-  protein_g: number;
-  fat_g: number;
-  carbs_g: number;
-} | null;
+type Goals = { kcal: number } | null;
 
 type Props = {
   consumed: Nutrients;
@@ -48,10 +43,6 @@ export function DailyNutritionHero({ consumed, goal, exerciseKcal = 0 }: Props) 
         ? `超出 ${centerValue} 千卡，目標 ${goalKcal}，已攝取 ${foodKcal}`
         : `剩餘 ${centerValue} 千卡，目標 ${goalKcal}，已攝取 ${foodKcal}`;
 
-  const c = displayMacroG(consumed.carbs_g);
-  const f = displayMacroG(consumed.fat_g);
-  const p = displayMacroG(consumed.protein_g);
-
   return (
     <View style={styles.wrap}>
       <ProgressRing
@@ -70,27 +61,6 @@ export function DailyNutritionHero({ consumed, goal, exerciseKcal = 0 }: Props) 
         <StatCol label={zhTW.diary.goal} value={goalKcal != null ? String(goalKcal) : '—'} />
         <StatCol label={zhTW.diary.food} value={String(foodKcal)} />
         <StatCol label={zhTW.diary.exercise} value={String(displayKcal(exerciseKcal))} />
-      </View>
-
-      <View style={styles.macroRow}>
-        <MacroMiniRing
-          label={zhTW.diary.macros.carbs}
-          consumed={c}
-          goal={goal ? displayMacroG(goal.carbs_g) : null}
-          color={theme.colors.carbs}
-        />
-        <MacroMiniRing
-          label={zhTW.diary.macros.fat}
-          consumed={f}
-          goal={goal ? displayMacroG(goal.fat_g) : null}
-          color={theme.colors.fat}
-        />
-        <MacroMiniRing
-          label={zhTW.diary.macros.protein}
-          consumed={p}
-          goal={goal ? displayMacroG(goal.protein_g) : null}
-          color={theme.colors.protein}
-        />
       </View>
     </View>
   );
@@ -151,11 +121,5 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     color: theme.colors.textMuted,
     textTransform: 'uppercase',
-  },
-  macroRow: {
-    flexDirection: 'row',
-    width: '100%',
-    marginTop: theme.space.lg,
-    paddingHorizontal: theme.space.sm,
   },
 });

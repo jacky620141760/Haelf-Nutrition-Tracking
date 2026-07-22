@@ -23,13 +23,26 @@ function initialMode(draft: FoodDraft): KcalInputMode {
   return draft.source === 'manual' ? 'linked' : 'manual';
 }
 
+function macroFieldString(value: number | null, source: FoodDraft['source']): string {
+  if (value != null) return String(value);
+  return source === 'manual' ? '0' : '';
+}
+
 function nutrientStrings(draft: FoodDraft): NutrientStrings {
-  return {
-    kcal: draft.sourceKcal == null ? '' : String(draft.sourceKcal),
-    protein: draft.sourceProteinG == null ? '' : String(draft.sourceProteinG),
-    fat: draft.sourceFatG == null ? '' : String(draft.sourceFatG),
-    carbs: draft.sourceCarbsG == null ? '' : String(draft.sourceCarbsG),
-  };
+  const protein = macroFieldString(draft.sourceProteinG, draft.source);
+  const fat = macroFieldString(draft.sourceFatG, draft.source);
+  const carbs = macroFieldString(draft.sourceCarbsG, draft.source);
+  let kcal = draft.sourceKcal == null ? '' : String(draft.sourceKcal);
+  if (
+    draft.source === 'manual' &&
+    draft.sourceKcal == null &&
+    protein === '0' &&
+    fat === '0' &&
+    carbs === '0'
+  ) {
+    kcal = '0';
+  }
+  return { kcal, protein, fat, carbs };
 }
 
 function previewValue(raw: string): number | null {

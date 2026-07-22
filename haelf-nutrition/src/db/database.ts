@@ -8,6 +8,8 @@ const DB_NAME = 'haelf_nutrition.db';
 let dbInstance: SQLite.SQLiteDatabase | null = null;
 let writeAllowed = true;
 let webTransactionQueue: Promise<void> = Promise.resolve();
+let initPromise: Promise<DbInitResult> | null = null;
+let lastReadyResult: DbInitResult | null = null;
 
 export function isWriteAllowed(): boolean {
   return writeAllowed;
@@ -87,8 +89,23 @@ async function tableExists(db: SQLite.SQLiteDatabase, name: string): Promise<boo
 }
 
 export async function initDatabase(): Promise<DbInitResult> {
+  if (dbInstance && lastReadyResult?.status === 'ready') {
+    return lastReadyResult;
+  }
+  if (!initPromise) {
+    initPromise = openAndMigrateDatabase().then((result) => {
+      if (result.status !== 'ready') initPromise = null;
+      return result;
+    });
+  }
+  return initPromise;
+}
+
+async function openAndMigrateDatabase(): Promise<DbInitResult> {
   try {
-    dbInstance = await SQLite.openDatabaseAsync(DB_NAME);
+    if (!dbInstance) {
+      dbInstance = await SQLite.openDatabaseAsync(DB_NAME);
+    }
     const db = dbInstance;
     await db.execAsync('PRAGMA foreign_keys = ON');
 
@@ -146,9 +163,19 @@ export async function initDatabase(): Promise<DbInitResult> {
     }
 
     writeAllowed = true;
-    return { status: 'ready', schemaVersion: version ?? SCHEMA_VERSION };
+    lastReadyResult = { status: 'ready', schemaVersion: version ?? SCHEMA_VERSION };
+    return lastReadyResult;
   } catch (e) {
     writeAllowed = false;
+    lastReadyResult = null;
+    if (dbInstance) {
+      try {
+        await dbInstance.closeAsync();
+      } catch {
+        /* ignore close errors */
+      }
+      dbInstance = null;
+    }
     return {
       status: 'unsupported',
       error: e instanceof Error ? e.message : String(e),
@@ -182,6 +209,8 @@ export async function clearAllAppTables(): Promise<void> {
 }
 
 export async function deleteDatabaseAndReopen(): Promise<DbInitResult> {
+  initPromise = null;
+  lastReadyResult = null;
   if (dbInstance) {
     await dbInstance.closeAsync();
     dbInstance = null;

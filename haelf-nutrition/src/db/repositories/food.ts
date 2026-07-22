@@ -2,6 +2,7 @@ import type { FoodCatalogItem, FoodEntry, MealType, NutritionBasis, FoodSource }
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { computeSnapshot } from '../../domain/nutrition';
 import { assertWritable, getDb, runInTransaction } from '../database';
+import { scheduleSync } from '../../services/sync/scheduler';
 
 type FoodRow = {
   id: number;
@@ -146,6 +147,7 @@ export async function createFoodEntry(
       now,
     ]
   );
+  scheduleSync();
   return result.lastInsertRowId;
 }
 
@@ -193,6 +195,7 @@ export async function updateFoodEntry(
       id,
     ]
   );
+  scheduleSync();
 }
 
 export async function deleteFoodEntry(id: number): Promise<void> {
@@ -202,6 +205,7 @@ export async function deleteFoodEntry(id: number): Promise<void> {
     `UPDATE food_entries SET deleted_at = ?, updated_at = ? WHERE id = ?`,
     [now, now, id]
   );
+  scheduleSync();
 }
 
 export async function deleteFoodEntries(ids: number[]): Promise<void> {
@@ -215,6 +219,7 @@ export async function deleteFoodEntries(ids: number[]): Promise<void> {
       );
     }
   });
+  scheduleSync();
 }
 
 type CatalogRow = {

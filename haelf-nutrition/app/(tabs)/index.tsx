@@ -58,14 +58,7 @@ export default function DiaryScreen() {
     return map;
   }, [entries]);
 
-  const goal = summary?.goal
-    ? {
-        kcal: summary.goal.kcal,
-        protein_g: summary.goal.proteinG,
-        fat_g: summary.goal.fatG,
-        carbs_g: summary.goal.carbsG,
-      }
-    : null;
+  const goal = summary?.goal ? { kcal: summary.goal.kcal } : null;
 
   const onDelete = async (entry: FoodEntry) => {
     const confirmed = await confirmDialog(

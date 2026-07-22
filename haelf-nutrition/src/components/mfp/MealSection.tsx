@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { FoodEntry, MealType } from '@/src/domain/types';
-import { displayKcal, displayNutrients, sumNutrients } from '@/src/domain/nutrition';
+import { displayKcal, sumNutrients } from '@/src/domain/nutrition';
 import { theme } from '@/src/theme';
 import { useApp } from '@/src/context/AppContext';
 
@@ -14,30 +14,22 @@ export function FoodRow({
   onDelete: () => void;
 }) {
   const { t } = useApp();
-  const d = displayNutrients({
-    kcal: entry.snapKcal,
-    protein_g: entry.snapProteinG,
-    fat_g: entry.snapFatG,
-    carbs_g: entry.snapCarbsG,
-  });
+  const kcal = displayKcal(entry.snapKcal);
   return (
     <Pressable
       onPress={onPress}
       onLongPress={onDelete}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       accessibilityRole="button"
-      accessibilityLabel={`${entry.name} ${d.kcal} kcal`}
+      accessibilityLabel={`${entry.name} ${kcal} kcal`}
       accessibilityHint={t('accessibility.editFoodHint')}
     >
       <View style={styles.rowMain}>
         <Text style={styles.foodName} numberOfLines={1}>
           {entry.name}
         </Text>
-        <Text style={styles.foodSub} numberOfLines={1}>
-          P{d.protein_g} · F{d.fat_g} · C{d.carbs_g}
-        </Text>
       </View>
-      <Text style={styles.kcal}>{d.kcal}</Text>
+      <Text style={styles.kcal}>{kcal}</Text>
       <Text style={styles.chevron}>›</Text>
     </Pressable>
   );
@@ -166,11 +158,6 @@ const styles = StyleSheet.create({
     fontSize: theme.font.body,
     fontWeight: '500',
     color: theme.colors.text,
-  },
-  foodSub: {
-    marginTop: 2,
-    fontSize: theme.font.bodySmall,
-    color: theme.colors.textMuted,
   },
   kcal: {
     fontSize: theme.font.body,

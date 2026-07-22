@@ -30,6 +30,7 @@ type AppContextValue = {
   viewingHistory: boolean;
   refreshToken: number;
   bumpRefresh: () => void;
+  reloadFromDb: () => Promise<void>;
   reinitDatabase: () => Promise<void>;
   wipeAndRestart: () => Promise<void>;
   isWeb: boolean;
@@ -54,6 +55,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const followTodayRef = useRef(true);
 
   const bumpRefresh = useCallback(() => setRefreshToken((n) => n + 1), []);
+
+  const reloadFromDb = useCallback(async () => {
+    try {
+      setPreferences(await getPreferences());
+    } catch {
+      /* ignore */
+    }
+    bumpRefresh();
+  }, [bumpRefresh]);
 
   const boot = useCallback(async () => {
     const result = await initDatabase();
@@ -166,6 +176,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       viewingHistory: selectedDate !== todayLocalDate,
       refreshToken,
       bumpRefresh,
+      reloadFromDb,
       reinitDatabase,
       wipeAndRestart,
       isWeb: isWebPreview() || Platform.OS === 'web',
@@ -182,6 +193,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       goToToday,
       refreshToken,
       bumpRefresh,
+      reloadFromDb,
       reinitDatabase,
       wipeAndRestart,
       preferences,

@@ -34,6 +34,13 @@ const TABLES: SyncableTable[] = [
   'app_preferences',
 ];
 
+/** Remote tables keyed by date or singleton — no local_id column in Postgres. */
+const TABLES_WITHOUT_LOCAL_ID = new Set<SyncableTable>([
+  'daily_step_totals',
+  'daily_diary_status',
+  'app_preferences',
+]);
+
 function v(value: unknown): SqlValue {
   if (value == null) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -51,13 +58,15 @@ async function run(sql: string, params: SqlValue[] = []): Promise<void> {
 
 function toRemoteRow(table: SyncableTable, row: Record<string, unknown>, userId: string) {
   const cloudId = String(row.cloud_id);
-  const base = {
+  const base: Record<string, unknown> = {
     id: cloudId,
     user_id: userId,
-    local_id: row.id ?? null,
     updated_at: row.updated_at,
     deleted_at: row.deleted_at ?? null,
   };
+  if (!TABLES_WITHOUT_LOCAL_ID.has(table)) {
+    base.local_id = row.id ?? null;
+  }
 
   const map: Record<SyncableTable, Record<string, unknown>> = {
     food_catalog: {
@@ -197,7 +206,39 @@ async function ensureCloudIds(table: SyncableTable): Promise<void> {
   }
 }
 
+async function pushAppPreferences(userId: string): Promise<void> {
+  const rows = await getDb().getAllAsync<Record<string, unknown>>(`SELECT * FROM app_preferences`);
+  if (!rows.length) return;
+
+  const local = await getDb().getFirstAsync<{ cloud_id: string | null }>(
+    `SELECT cloud_id FROM app_preferences WHERE id = 1`
+  );
+  const { data: remote, error: fetchError } = await supabase
+    .from('app_preferences')
+    .select('id')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (fetchError) throw new Error(`app_preferences push failed: ${fetchError.message}`);
+
+  const canonicalId = remote?.id ?? local?.cloud_id ?? newCloudId();
+  if (local?.cloud_id !== canonicalId) {
+    await run(`UPDATE app_preferences SET cloud_id = ? WHERE id = 1`, p(canonicalId));
+  }
+
+  const payload = rows.map((row) => {
+    const remoteRow = toRemoteRow('app_preferences', row, userId);
+    remoteRow.id = canonicalId;
+    return remoteRow;
+  });
+  const { error } = await supabase.from('app_preferences').upsert(payload, { onConflict: 'user_id' });
+  if (error) throw new Error(`app_preferences push failed: ${error.message}`);
+}
+
 async function pushTable(table: SyncableTable, userId: string): Promise<void> {
+  if (table === 'app_preferences') {
+    await pushAppPreferences(userId);
+    return;
+  }
   await ensureCloudIds(table);
   const rows = await getDb().getAllAsync<Record<string, unknown>>(`SELECT * FROM ${table}`);
   if (!rows.length) return;
@@ -427,14 +468,40 @@ async function applyRemoteRow(table: SyncableTable, remote: Record<string, unkno
   }
 }
 
-async function pullTable(table: SyncableTable, userId: string, since: string | null): Promise<void> {
+/** Overlap incremental pulls so device clock skew cannot skip remote rows. */
+const PULL_OVERLAP_MS = 24 * 60 * 60 * 1000;
+
+function effectivePullSince(since: string | null): string | null {
+  if (!since) return null;
+  return new Date(new Date(since).getTime() - PULL_OVERLAP_MS).toISOString();
+}
+
+function maxUpdatedAt(current: string | null, candidate: unknown): string | null {
+  if (candidate == null) return current;
+  const next = String(candidate);
+  if (!next) return current;
+  return !current || next > current ? next : current;
+}
+
+async function pullTable(
+  table: SyncableTable,
+  userId: string,
+  since: string | null,
+  watermark: string | null
+): Promise<string | null> {
   let query = supabase.from(table).select('*').eq('user_id', userId);
   if (since) query = query.gt('updated_at', since);
   const { data, error } = await query;
   if (error) throw new Error(`${table} pull failed: ${error.message}`);
+  let nextWatermark = watermark;
   for (const remote of data ?? []) {
     await applyRemoteRow(table, remote as Record<string, unknown>);
+    nextWatermark = maxUpdatedAt(
+      nextWatermark,
+      (remote as Record<string, unknown>).updated_at
+    );
   }
+  return nextWatermark;
 }
 
 async function drainOutbox(): Promise<void> {
@@ -450,7 +517,8 @@ async function drainOutbox(): Promise<void> {
       if (error) throw new Error(error.message);
     } else if (row.payload_json) {
       const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
-      const { error } = await supabase.from(row.table_name).upsert(payload, { onConflict: 'id' });
+      const conflict = row.table_name === 'app_preferences' ? 'user_id' : 'id';
+      const { error } = await supabase.from(row.table_name).upsert(payload, { onConflict: conflict });
       if (error) throw new Error(error.message);
     }
     done.push(row.id);
@@ -460,21 +528,55 @@ async function drainOutbox(): Promise<void> {
 
 export type SyncResult = { ok: true } | { ok: false; message: string };
 
-export async function runFullSync(userId: string): Promise<SyncResult> {
+let syncInFlight: Promise<SyncResult> | null = null;
+let syncQueued = false;
+
+async function performFullSync(userId: string): Promise<SyncResult> {
   if (!isSupabaseConfigured()) {
     return { ok: false, message: 'Supabase is not configured' };
   }
-  try {
-    const since = await getSyncMeta('last_pull_at');
-    for (const table of TABLES) await pushTable(table, userId);
-    await drainOutbox();
-    for (const table of TABLES) await pullTable(table, userId, since);
-    await setSyncMeta('last_pull_at', new Date().toISOString());
-    await setSyncMeta('bound_user_id', userId);
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+
+  let lastResult: SyncResult = { ok: true };
+
+  do {
+    syncQueued = false;
+    try {
+      const since = await getSyncMeta('last_pull_at');
+      const pullSince = effectivePullSince(since);
+      for (const table of TABLES) await pushTable(table, userId);
+      await drainOutbox();
+      let watermark: string | null = since;
+      for (const table of TABLES) {
+        watermark = await pullTable(table, userId, pullSince, watermark);
+      }
+      if (watermark && watermark !== since) {
+        await setSyncMeta('last_pull_at', watermark);
+      } else if (!since) {
+        await setSyncMeta('last_pull_at', watermark ?? new Date().toISOString());
+      }
+      await setSyncMeta('bound_user_id', userId);
+      lastResult = { ok: true };
+    } catch (error) {
+      lastResult = {
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+      syncQueued = false;
+    }
+  } while (syncQueued);
+
+  return lastResult;
+}
+
+export function runFullSync(userId: string): Promise<SyncResult> {
+  if (!syncInFlight) {
+    syncInFlight = performFullSync(userId).finally(() => {
+      syncInFlight = null;
+    });
+  } else {
+    syncQueued = true;
   }
+  return syncInFlight;
 }
 
 export async function getBoundUserId(): Promise<string | null> {

@@ -26,6 +26,9 @@ import {
   nutrientProgress,
   remainingKcal,
   splitContinuousSegments,
+  splitTrendLineIndices,
+  recordedTrendLineIndices,
+  rollingWeeklyWeightAverages,
 } from '../src/domain/progress';
 import { pendingMigrations } from '../src/db/schema';
 import { parseAiResponse, serializeAiSuggestion } from '../src/services/ai/parser';
@@ -173,6 +176,42 @@ assert(calorieRingSemantic(1.01, true) === 'over', 'ring over');
 assert(remainingKcal(2100, 2000) === -100, 'ring remaining over');
 const segments = splitContinuousSegments([1, 2, null, 3, null, null, 4, 5]);
 assert(JSON.stringify(segments) === JSON.stringify([[1, 2], [3], [4, 5]]), 'weight gaps split lines');
+
+const lineIdx = splitTrendLineIndices([
+  { label: '2026-06-16', value: 70 },
+  { label: '2026-06-17', value: null },
+  { label: '2026-06-22', value: 72 },
+]);
+assert(JSON.stringify(lineIdx) === JSON.stringify([[0], [2]]), 'calendar gap breaks line');
+
+const weightLine = recordedTrendLineIndices([
+  { label: '2026-07-15', value: 82.5 },
+  { label: '2026-07-16', value: null },
+  { label: '2026-07-20', value: null },
+  { label: '2026-07-21', value: 82.2 },
+]);
+assert(JSON.stringify(weightLine) === JSON.stringify([[0, 3]]), 'weight connects across missing days');
+
+const weekly = rollingWeeklyWeightAverages(
+  new Map([
+    ['2026-06-01', 70],
+    ['2026-06-02', 72],
+    ['2026-06-08', 68],
+  ]),
+  '2026-06-14',
+  2
+);
+assert(weekly.length === 2, 'weekly point count');
+assert(weekly[1].value === 68, 'latest week average');
+assert(weekly[0].value === 71, 'prior week average');
+
+const sparseWeeks = rollingWeeklyWeightAverages(
+  new Map([['2026-06-20', 70], ['2026-07-10', 72]]),
+  '2026-07-22',
+  12
+);
+assert(sparseWeeks.length > 0 && sparseWeeks.length < 12, 'trim leading empty weeks');
+assert(!sparseWeeks.some((p) => p.value == null && sparseWeeks.indexOf(p) === 0), 'no leading blank week');
 
 // Migration registry
 assert(
