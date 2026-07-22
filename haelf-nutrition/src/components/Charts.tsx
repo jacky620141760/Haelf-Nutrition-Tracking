@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from 'react-native-svg';
 import { theme } from '@/src/theme';
+import { splitContinuousSegments } from '@/src/domain/progress';
 
 export type BarPoint = {
   label: string;
@@ -66,6 +67,23 @@ export function SimpleBarChart({
             />
           );
         })}
+        {points.map((p, i) => {
+          if (p.goal == null) return null;
+          const x = pad + i * ((width - pad * 2) / points.length) + 2;
+          const y = height - pad - (p.goal / max) * (height - pad * 2);
+          return (
+            <Line
+              key={`g-${p.label}`}
+              x1={x}
+              y1={y}
+              x2={x + barW + 4}
+              y2={y}
+              stroke={theme.colors.danger}
+              strokeWidth="2"
+              accessibilityLabel={`${p.label} 目標: ${p.goal}`}
+            />
+          );
+        })}
         {points.map((p, i) => (
           <SvgText
             key={`l-${p.label}`}
@@ -79,7 +97,7 @@ export function SimpleBarChart({
           </SvgText>
         ))}
       </Svg>
-      <Text style={styles.legend}>■ 攝取　— 未記錄</Text>
+      <Text style={styles.legend}>■ 攝取　━ 目標　— 未記錄</Text>
     </View>
   );
 }
@@ -116,15 +134,22 @@ export function SimpleLineChart({
     const y = height - pad - ((p.value - min) / span) * (height - pad * 2);
     return { x, y, label: p.label, value: p.value };
   });
-  const poly = coords
-    .filter(Boolean)
-    .map((c) => `${c!.x},${c!.y}`)
-    .join(' ');
+  const segments = splitContinuousSegments(coords);
 
   return (
     <View accessibilityLabel={accessibilityLabel}>
       <Svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
-        <Polyline points={poly} fill="none" stroke={theme.colors.chartWeight} strokeWidth="2" />
+        {segments.map((segment, index) =>
+          segment.length >= 2 ? (
+            <Polyline
+              key={`segment-${index}`}
+              points={segment.map((coordinate) => `${coordinate.x},${coordinate.y}`).join(' ')}
+              fill="none"
+              stroke={theme.colors.chartWeight}
+              strokeWidth="2"
+            />
+          ) : null
+        )}
         {coords.map((c, i) =>
           c ? (
             <Circle

@@ -120,3 +120,14 @@ export async function getWeightEntry(id: number): Promise<WeightEntry | null> {
   const row = await getDb().getFirstAsync<Row>(`SELECT * FROM weight_entries WHERE id=?`, [id]);
   return row ? map(row) : null;
 }
+
+export async function getLatestWeightOnOrBefore(
+  localDate: string
+): Promise<WeightEntry | null> {
+  const row = await getDb().getFirstAsync<Row>(
+    `SELECT * FROM weight_entries WHERE local_date<=?
+     ORDER BY local_date DESC, utc_timestamp DESC, id DESC LIMIT 1`,
+    [localDate]
+  );
+  return row ? map(row) : null;
+}

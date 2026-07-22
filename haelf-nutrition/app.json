@@ -43,6 +43,12 @@
       "expo-sqlite",
       "expo-secure-store",
       [
+        "expo-sensors",
+        {
+          "motionPermission": "允許 Haelf 讀取步數，以在健康習慣中顯示當日計步進度。"
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "用於掃描食品條碼與拍攝食物照片。"

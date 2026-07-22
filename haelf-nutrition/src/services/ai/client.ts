@@ -6,24 +6,46 @@ const SCHEMA_INSTRUCTION = `以單一 JSON 物件回覆，勿包含 markdown 或
 
 export type AiClientResult =
   | { ok: true; suggestion: AiSuggestion }
-  | { ok: false; reason: 'timeout' | 'network' | 'parse' | 'http' | 'no_key'; message: string };
+  | { ok: false; reason: 'timeout' | 'network' | 'parse' | 'http' | 'no_key' | 'cancelled'; message: string };
+
+type ChatFailureReason = 'timeout' | 'network' | 'http' | 'no_key' | 'cancelled';
 
 async function chatCompletion(params: {
   endpointUrl: string;
   model: string;
   messages: unknown[];
   timeoutMs: number;
-}): Promise<{ ok: true; content: string } | { ok: false; reason: 'timeout' | 'network' | 'http'; message: string }> {
+  signal?: AbortSignal;
+}): Promise<{ ok: true; content: string } | { ok: false; reason: ChatFailureReason; message: string }> {
   const apiKey = await getApiKey();
   if (!apiKey) {
-    return { ok: false, reason: 'network', message: '未設定 API Key' };
+    return { ok: false, reason: 'no_key', message: '未設定 API Key，請前往 AI 設定。' };
+  }
+  try {
+    const endpoint = new URL(params.endpointUrl);
+    if (endpoint.protocol !== 'https:' && endpoint.protocol !== 'http:') {
+      throw new Error('protocol');
+    }
+  } catch {
+    return {
+      ok: false,
+      reason: 'http',
+      message: 'AI 端點 URL 無效，請在 AI 設定中檢查完整網址。',
+    };
   }
   const base = params.endpointUrl.replace(/\/$/, '');
   const url = base.includes('/chat/completions')
     ? base
     : `${base}/chat/completions`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), params.timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, params.timeoutMs);
+  const cancel = () => controller.abort();
+  if (params.signal?.aborted) cancel();
+  params.signal?.addEventListener('abort', cancel, { once: true });
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -40,7 +62,19 @@ async function chatCompletion(params: {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      return { ok: false, reason: 'http', message: `HTTP ${res.status} ${text.slice(0, 200)}` };
+      const action =
+        res.status === 401 || res.status === 403
+          ? '端點拒絕授權，請檢查 API Key。'
+          : res.status === 404
+            ? '找不到 AI 端點，請檢查端點 URL。'
+            : res.status === 429
+              ? 'AI 服務已達速率或額度限制，請稍後再試。'
+              : `AI 端點回傳 HTTP ${res.status}。`;
+      return {
+        ok: false,
+        reason: 'http',
+        message: `${action}${text ? `\n${text.slice(0, 200)}` : ''}`,
+      };
     }
     const data = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
@@ -52,7 +86,9 @@ async function chatCompletion(params: {
     return { ok: true, content };
   } catch (e) {
     if (e instanceof Error && e.name === 'AbortError') {
-      return { ok: false, reason: 'timeout', message: '逾時' };
+      return timedOut
+        ? { ok: false, reason: 'timeout', message: '逾時' }
+        : { ok: false, reason: 'cancelled', message: '已取消' };
     }
     return {
       ok: false,
@@ -61,14 +97,16 @@ async function chatCompletion(params: {
     };
   } finally {
     clearTimeout(timer);
+    params.signal?.removeEventListener('abort', cancel);
   }
 }
 
 /** Capability_Check: 10s. Returns true only if explicitly confirmed vision support. */
 export async function checkVisionCapability(
   endpointUrl: string,
-  model: string
-): Promise<'supported' | 'unsupported' | 'unknown'> {
+  model: string,
+  signal?: AbortSignal
+): Promise<'supported' | 'unsupported' | 'unknown' | 'cancelled'> {
   const lower = model.toLowerCase();
   // Heuristic + probe: models with vision/vl in name often support images
   const nameHint =
@@ -81,6 +119,7 @@ export async function checkVisionCapability(
     endpointUrl,
     model,
     timeoutMs: 10_000,
+    signal,
     messages: [
       {
         role: 'user',
@@ -94,7 +133,10 @@ export async function checkVisionCapability(
     ],
   });
   if (!probe.ok) {
-    if (nameHint) return 'unknown';
+    if (probe.reason === 'cancelled') return 'cancelled';
+    if (probe.reason === 'no_key' || probe.reason === 'http') {
+      throw new Error(probe.message);
+    }
     return 'unknown';
   }
   try {
@@ -115,6 +157,7 @@ export async function analyzeFoodWithAi(params: {
   text?: string;
   imageBase64?: string;
   mimeType?: string;
+  signal?: AbortSignal;
 }): Promise<AiClientResult> {
   const apiKey = await getApiKey();
   if (!apiKey) {
@@ -135,6 +178,7 @@ export async function analyzeFoodWithAi(params: {
     endpointUrl: params.endpointUrl,
     model: params.model,
     timeoutMs: 30_000,
+    signal: params.signal,
     messages: [
       { role: 'system', content: '你是營養標示助手。' },
       { role: 'user', content },
@@ -143,7 +187,7 @@ export async function analyzeFoodWithAi(params: {
   if (!result.ok) {
     return {
       ok: false,
-      reason: result.reason === 'timeout' ? 'timeout' : result.reason === 'http' ? 'http' : 'network',
+      reason: result.reason,
       message:
         result.reason === 'timeout'
           ? '分析逾時（30 秒）'
@@ -152,7 +196,11 @@ export async function analyzeFoodWithAi(params: {
   }
   const parsed = parseAiResponse(result.content);
   if (!parsed.ok) {
-    return { ok: false, reason: 'parse', message: parsed.error };
+    return {
+      ok: false,
+      reason: 'parse',
+      message: `AI 回應格式無效，請重試或改用手動新增。\n${parsed.error}`,
+    };
   }
   return { ok: true, suggestion: parsed.suggestion };
 }

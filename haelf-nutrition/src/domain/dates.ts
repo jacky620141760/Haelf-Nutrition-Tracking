@@ -32,15 +32,58 @@ export function localDateRangeEnding(endDate: string, days: number): string[] {
   return result;
 }
 
+export function weekDates(localDate: string, weekStart: 0 | 1 = 1): string[] {
+  const date = parseLocalDateToDate(localDate);
+  const offset = (date.getDay() - weekStart + 7) % 7;
+  const start = addLocalDays(localDate, -offset);
+  return Array.from({ length: 7 }, (_, index) => addLocalDays(start, index));
+}
+
 export function parseLocalDateToDate(localDate: string): Date {
   const [y, m, d] = localDate.split('-').map(Number);
   return new Date(y, m - 1, d, 12, 0, 0);
+}
+
+export function isValidLocalDate(localDate: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) return false;
+  const [year, month, day] = localDate.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
 }
 
 export function compareLocalDates(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
+}
+
+export type EntryTimeMetadata = {
+  utcTimestamp: string;
+  localDate: string;
+  tzIana: string;
+  tzOffsetMinutes: number;
+};
+
+export function resolveEntryTimeForSave(
+  input: {
+    original?: EntryTimeMetadata;
+    requestedLocalDate?: string;
+    draftUtcTimestamp?: string;
+  },
+  now = new Date()
+): EntryTimeMetadata {
+  if (input.original) return { ...input.original };
+  const tz = getTimeZoneMetadata(now);
+  return {
+    utcTimestamp: input.draftUtcTimestamp ?? utcNowIso(now),
+    localDate: input.requestedLocalDate ?? toLocalDateString(now),
+    tzIana: tz.iana,
+    tzOffsetMinutes: tz.utcOffsetMinutes,
+  };
 }
 
 export type DayBoundaryListener = (localDate: string) => void;

@@ -4,14 +4,21 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { AppState, Platform } from 'react-native';
 import { dayBoundaryManager, toLocalDateString } from '../domain/dates';
-import type { DbInitResult } from '../domain/types';
+import type { AppPreferences, DbInitResult } from '../domain/types';
 import { initDatabase, deleteDatabaseAndReopen } from '../db/database';
 import { maintainBarcodeCache } from '../db/repositories/barcode';
+import {
+  DEFAULT_PREFERENCES,
+  getPreferences,
+  updatePreferences as persistPreferences,
+} from '../db/repositories/preferences';
 import { isWebPreview } from '../services/secureStore';
+import { translate } from '../i18n';
 
 type AppContextValue = {
   ready: boolean;
@@ -26,6 +33,11 @@ type AppContextValue = {
   reinitDatabase: () => Promise<void>;
   wipeAndRestart: () => Promise<void>;
   isWeb: boolean;
+  preferences: AppPreferences;
+  updatePreferences: (
+    patch: Partial<Omit<AppPreferences, 'updatedAt'>>
+  ) => Promise<void>;
+  t: (key: string, params?: Record<string, string | number>) => string;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -37,6 +49,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedDate, setSelectedDate] = useState(toLocalDateString());
   const [refreshToken, setRefreshToken] = useState(0);
   const [followToday, setFollowToday] = useState(true);
+  const [preferences, setPreferences] =
+    useState<AppPreferences>(DEFAULT_PREFERENCES);
+  const followTodayRef = useRef(true);
 
   const bumpRefresh = useCallback(() => setRefreshToken((n) => n + 1), []);
 
@@ -45,6 +60,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setDbStatus(result);
     if (result.status === 'ready') {
       try {
+        setPreferences(await getPreferences());
         await maintainBarcodeCache();
       } catch {
         /* ignore maintenance errors */
@@ -58,10 +74,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [boot]);
 
   useEffect(() => {
+    followTodayRef.current = followToday;
+  }, [followToday]);
+
+  useEffect(() => {
     dayBoundaryManager.start();
     const unsub = dayBoundaryManager.subscribe((d) => {
       setTodayLocalDate(d);
-      if (followToday) {
+      if (followTodayRef.current) {
         setSelectedDate(d);
       }
     });
@@ -75,7 +95,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dayBoundaryManager.stop();
       sub.remove();
     };
-  }, [followToday]);
+  }, []);
 
   const onSelectDate = useCallback(
     (d: string) => {
@@ -99,18 +119,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const wipeAndRestart = useCallback(async () => {
     setReady(false);
-    const result = await deleteDatabaseAndReopen();
-    setDbStatus(result);
-    if (result.status === 'ready') {
-      try {
-        await maintainBarcodeCache();
-      } catch {
-        /* ignore */
+    try {
+      const result = await deleteDatabaseAndReopen();
+      setDbStatus(result);
+      if (result.status === 'ready') {
+        try {
+          setPreferences(await getPreferences());
+          await maintainBarcodeCache();
+        } catch {
+          /* ignore */
+        }
       }
+      bumpRefresh();
+    } catch (error) {
+      setDbStatus({
+        status: 'unsupported',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setReady(true);
     }
-    setReady(true);
-    bumpRefresh();
   }, [bumpRefresh]);
+
+  const updatePreferences = useCallback(
+    async (patch: Partial<Omit<AppPreferences, 'updatedAt'>>) => {
+      setPreferences(await persistPreferences(patch));
+      bumpRefresh();
+    },
+    [bumpRefresh]
+  );
+
+  const t = useCallback(
+    (key: string, params?: Record<string, string | number>) =>
+      translate(preferences.locale, key, params),
+    [preferences.locale]
+  );
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -126,6 +169,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       reinitDatabase,
       wipeAndRestart,
       isWeb: isWebPreview() || Platform.OS === 'web',
+      preferences,
+      updatePreferences,
+      t,
     }),
     [
       ready,
@@ -138,6 +184,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       bumpRefresh,
       reinitDatabase,
       wipeAndRestart,
+      preferences,
+      updatePreferences,
+      t,
     ]
   );
 

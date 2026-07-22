@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -15,46 +15,55 @@ import {
   listRecent,
   setCatalogFavorite,
 } from '@/src/db/repositories/food';
-import type { FoodCatalogItem, FoodDraft, MealType, NutritionBasis } from '@/src/domain/types';
+import type { FoodCatalogItem, MealType, NutritionBasis } from '@/src/domain/types';
 import { collectDataQualityWarnings } from '@/src/domain/quality';
-import { validateFoodDraft, parseFiniteNumber } from '@/src/domain/validation';
-import { computeSnapshot, displayNutrients } from '@/src/domain/nutrition';
+import { displayNutrients } from '@/src/domain/nutrition';
+import { validateFoodDraft } from '@/src/domain/validation';
 import { confirmFoodDraft } from '@/src/services/confirmFood';
 import { consumePendingDraft, emptyDraft } from '@/src/services/draftStore';
 import { BasisPicker, MealPicker } from '@/src/components/Pickers';
-import { Field, PrimaryButton } from '@/src/components/ui';
+import { Field, MfpButton, PrimaryButton } from '@/src/components/ui';
+import { NutritionInputFields } from '@/src/components/nutrition/NutritionInputFields';
+import { useFoodNutrientForm } from '@/src/hooks/useFoodNutrientForm';
 import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
 
 export default function AddFoodScreen() {
   const router = useRouter();
   const { selectedDate, bumpRefresh } = useApp();
-  const params = useLocalSearchParams<{ tab?: string }>();
+  const params = useLocalSearchParams<{ tab?: string; meal?: string }>();
+  const initialMeal = (['breakfast', 'lunch', 'dinner', 'snack'] as MealType[]).includes(
+    params.meal as MealType
+  )
+    ? (params.meal as MealType)
+    : 'lunch';
   const [tab, setTab] = useState<'form' | 'favorites' | 'recent'>(
     params.tab === 'favorites' ? 'favorites' : 'form'
   );
-  const [draft, setDraft] = useState<FoodDraft>(() => emptyDraft('lunch'));
-  const [name, setName] = useState('');
-  const [kcal, setKcal] = useState('');
-  const [protein, setProtein] = useState('');
-  const [fat, setFat] = useState('');
-  const [carbs, setCarbs] = useState('');
-  const [qty, setQty] = useState('');
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const form = useFoodNutrientForm(emptyDraft(initialMeal));
+  const {
+    draft,
+    setDraft,
+    name,
+    setName,
+    kcal,
+    protein,
+    fat,
+    carbs,
+    quantity,
+    setQuantity,
+    errors,
+    kcalMode,
+    preview,
+  } = form;
   const [warnings, setWarnings] = useState<string[]>([]);
   const [needQualityConfirm, setNeedQualityConfirm] = useState(false);
   const [qualityConfirmed, setQualityConfirmed] = useState(false);
   const [favorites, setFavorites] = useState<FoodCatalogItem[]>([]);
   const [recent, setRecent] = useState<FoodCatalogItem[]>([]);
 
-  const applyDraft = (d: FoodDraft) => {
-    setDraft(d);
-    setName(d.name);
-    setKcal(d.sourceKcal == null ? '' : String(d.sourceKcal));
-    setProtein(d.sourceProteinG == null ? '' : String(d.sourceProteinG));
-    setFat(d.sourceFatG == null ? '' : String(d.sourceFatG));
-    setCarbs(d.sourceCarbsG == null ? '' : String(d.sourceCarbsG));
-    setQty(d.quantity == null ? '' : String(d.quantity));
+  const applyFoodDraft = (d: ReturnType<typeof form.buildDraft>) => {
+    form.applyDraft(d);
     setWarnings(d.dataQualityWarnings);
     setNeedQualityConfirm(d.dataQualityWarnings.length > 0);
     setQualityConfirmed(false);
@@ -63,7 +72,7 @@ export default function AddFoodScreen() {
 
   useEffect(() => {
     const pending = consumePendingDraft();
-    if (pending) applyDraft(pending);
+    if (pending) applyFoodDraft(pending);
   }, []);
 
   useEffect(() => {
@@ -73,28 +82,12 @@ export default function AddFoodScreen() {
     })();
   }, [tab]);
 
-  const preview = useMemo(() => {
-    const sk = parseFiniteNumber(kcal);
-    const sp = parseFiniteNumber(protein);
-    const sf = parseFiniteNumber(fat);
-    const sc = parseFiniteNumber(carbs);
-    const q = parseFiniteNumber(qty);
-    if (sk == null || sp == null || sf == null || sc == null || q == null) return null;
-    return displayNutrients(
-      computeSnapshot(draft.basis, { kcal: sk, protein_g: sp, fat_g: sf, carbs_g: sc }, q)
-    );
-  }, [kcal, protein, fat, carbs, qty, draft.basis]);
+  useEffect(() => {
+    setQualityConfirmed(false);
+  }, [name, kcal, protein, fat, carbs, quantity, draft.basis]);
 
-  const buildDraftFromForm = (): FoodDraft => {
-    const d: FoodDraft = {
-      ...draft,
-      name,
-      sourceKcal: parseFiniteNumber(kcal),
-      sourceProteinG: parseFiniteNumber(protein),
-      sourceFatG: parseFiniteNumber(fat),
-      sourceCarbsG: parseFiniteNumber(carbs),
-      quantity: parseFiniteNumber(qty),
-    };
+  const buildDraftFromForm = () => {
+    const d = form.buildDraft();
     d.dataQualityWarnings = collectDataQualityWarnings(d);
     return d;
   };
@@ -110,9 +103,7 @@ export default function AddFoodScreen() {
       sourceCarbsG: d.sourceCarbsG,
       quantity: d.quantity,
     });
-    const map: Record<string, string> = {};
-    for (const e of errs) map[e.field] = e.message;
-    setErrors(map);
+    form.setValidationErrors(errs);
     setWarnings(d.dataQualityWarnings);
     if (errs.length) return;
     if (d.dataQualityWarnings.length && !qualityConfirmed) {
@@ -130,7 +121,7 @@ export default function AddFoodScreen() {
   };
 
   const pickCatalog = (item: FoodCatalogItem) => {
-    applyDraft({
+    applyFoodDraft({
       name: item.name,
       mealType: draft.mealType,
       basis: item.basis,
@@ -244,46 +235,31 @@ export default function AddFoodScreen() {
             value={draft.basis}
             onChange={(basis: NutritionBasis) => setDraft((d) => ({ ...d, basis }))}
           />
-          <Field
-            label={zhTW.food.kcal}
-            value={kcal}
-            onChangeText={setKcal}
-            keyboardType="decimal-pad"
-            error={errors.kcal}
-            placeholder={kcal === '' && draft.sourceKcal == null ? zhTW.common.unknown : undefined}
-          />
-          <Field
-            label={zhTW.food.protein}
-            value={protein}
-            onChangeText={setProtein}
-            keyboardType="decimal-pad"
-            error={errors.protein_g}
-          />
-          <Field
-            label={zhTW.food.fat}
-            value={fat}
-            onChangeText={setFat}
-            keyboardType="decimal-pad"
-            error={errors.fat_g}
-          />
-          <Field
-            label={zhTW.food.carbs}
-            value={carbs}
-            onChangeText={setCarbs}
-            keyboardType="decimal-pad"
-            error={errors.carbs_g}
+          <NutritionInputFields
+            kcal={kcal}
+            protein={protein}
+            fat={fat}
+            carbs={carbs}
+            mode={kcalMode}
+            errors={errors}
+            onKcalChange={form.onKcalChange}
+            onProteinChange={form.onProteinChange}
+            onFatChange={form.onFatChange}
+            onCarbsChange={form.onCarbsChange}
+            onRelink={form.relinkKcal}
           />
           <Field
             label={draft.basis === 'PER_100_G' ? zhTW.food.quantityG : zhTW.food.quantityServing}
-            value={qty}
-            onChangeText={setQty}
+            value={quantity}
+            onChangeText={setQuantity}
             keyboardType="decimal-pad"
             error={errors.quantity}
           />
           {preview ? (
             <Text style={styles.preview}>
-              {zhTW.diary.intake}：{preview.kcal} kcal · P{preview.protein_g} F{preview.fat_g} C
-              {preview.carbs_g}
+              {zhTW.diary.intake}：{displayNutrients(preview).kcal} kcal · P
+              {displayNutrients(preview).protein_g} F{displayNutrients(preview).fat_g} C
+              {displayNutrients(preview).carbs_g}
             </Text>
           ) : null}
           {warnings.length ? (
@@ -309,7 +285,7 @@ export default function AddFoodScreen() {
           ) : null}
           <PrimaryButton label={zhTW.food.confirmDraft} onPress={onConfirm} />
           <View style={{ height: theme.space.md }} />
-          <PrimaryButton label={zhTW.common.cancel} onPress={() => router.back()} />
+          <MfpButton label={zhTW.common.cancel} variant="outline" onPress={() => router.back()} />
         </View>
       )}
     </ScrollView>
@@ -328,11 +304,12 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: theme.colors.surface,
   },
-  tabOn: { backgroundColor: theme.colors.accentSoft, borderColor: theme.colors.accent },
-  tabText: { fontWeight: '600', fontSize: theme.font.small },
+  tabOn: { backgroundColor: theme.colors.skyBlue, borderColor: theme.colors.lakeBlue },
+  tabText: { fontWeight: '600', fontSize: theme.font.small, color: theme.colors.textMuted },
   label: { marginBottom: theme.space.xs, color: theme.colors.textMuted, fontSize: theme.font.small },
-  source: { marginBottom: theme.space.md, color: theme.colors.accent, fontWeight: '600' },
+  source: { marginBottom: theme.space.md, color: theme.colors.lakeBlue, fontWeight: '600' },
   preview: {
     marginBottom: theme.space.md,
     fontWeight: '600',
@@ -350,11 +327,12 @@ const styles = StyleSheet.create({
   catalogRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
     paddingVertical: theme.space.sm,
+    minHeight: 56,
   },
-  catalogName: { fontWeight: '600' },
+  catalogName: { fontWeight: '600', color: theme.colors.text },
   catalogMeta: { color: theme.colors.textMuted, fontSize: theme.font.small },
   favBtn: { minWidth: theme.minTouch, minHeight: theme.minTouch, alignItems: 'center', justifyContent: 'center' },
   empty: { textAlign: 'center', color: theme.colors.textMuted, marginTop: theme.space.lg },

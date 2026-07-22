@@ -1,65 +1,84 @@
 import { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useApp } from '@/src/context/AppContext';
 import { clearBarcodeCache } from '@/src/db/repositories/barcode';
 import { clearAllAppTables } from '@/src/db/database';
 import { clearApiKey } from '@/src/services/secureStore';
 import { Field, PrimaryButton, SectionTitle } from '@/src/components/ui';
-import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
+import { confirmDialog, notify } from '@/src/services/dialog';
 
 export default function DataSettingsScreen() {
-  const { bumpRefresh } = useApp();
+  const { bumpRefresh, updatePreferences, t } = useApp();
   const [confirmText, setConfirmText] = useState('');
 
-  const onClearCache = () => {
-    Alert.alert(zhTW.settings.clearBarcodeCache, '僅清除條碼快取，其他資料不變。', [
-      { text: zhTW.common.cancel, style: 'cancel' },
-      {
-        text: zhTW.common.confirm,
-        onPress: async () => {
-          await clearBarcodeCache();
-          Alert.alert(zhTW.settings.clearBarcodeCacheDone);
-        },
-      },
-    ]);
+  const onClearCache = async () => {
+    const confirmed = await confirmDialog(
+      t('settings.clearBarcodeCache'),
+      t('settings.clearBarcodeCache'),
+      { cancel: t('common.cancel'), confirm: t('common.confirm') }
+    );
+    if (!confirmed) return;
+    try {
+      await clearBarcodeCache();
+      notify(t('settings.clearBarcodeCacheDone'));
+    } catch (error) {
+      notify('清除失敗', error instanceof Error ? error.message : '無法清除條碼快取');
+    }
   };
 
   const onClearAll = async () => {
-    if (confirmText.trim() !== zhTW.settings.clearAllConfirmPhrase) {
-      Alert.alert(zhTW.settings.clearAllPrompt);
+    if (confirmText.trim() !== t('settings.clearAllConfirmPhrase')) {
+      notify(t('settings.clearAllPrompt'));
       return;
     }
-    Alert.alert(zhTW.settings.clearAll, zhTW.settings.clearAllWarning, [
-      { text: zhTW.common.cancel, style: 'cancel' },
-      {
-        text: zhTW.common.confirm,
-        style: 'destructive',
-        onPress: async () => {
-          await clearAllAppTables();
-          await clearApiKey();
-          setConfirmText('');
-          bumpRefresh();
-          Alert.alert('已清除全部本機資料');
-        },
-      },
-    ]);
+    const confirmed = await confirmDialog(
+      t('settings.clearAll'),
+      t('settings.clearAllWarning'),
+      { cancel: t('common.cancel'), confirm: t('common.confirm') }
+    );
+    if (!confirmed) return;
+    const failures: string[] = [];
+    try {
+      await clearAllAppTables();
+    } catch (error) {
+      failures.push(`SQLite：${error instanceof Error ? error.message : '清除失敗'}`);
+    }
+    try {
+      await clearApiKey();
+    } catch (error) {
+      failures.push(`Secure Store：${error instanceof Error ? error.message : '清除失敗'}`);
+    }
+    if (failures.length) {
+      notify('部分資料未能清除', failures.join('\n'));
+      return;
+    }
+    await updatePreferences({
+      locale: 'zh-TW',
+      waterUnit: 'ml',
+      weekStart: 1,
+      stepMode: 'pedometer',
+      exerciseCaloriesEnabled: true,
+    });
+    setConfirmText('');
+    bumpRefresh();
+    notify('已清除全部本機資料');
   };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <SectionTitle title={zhTW.settings.data} />
-      <Text style={styles.notice}>{zhTW.settings.backupNotice}</Text>
-      <PrimaryButton label={zhTW.settings.clearBarcodeCache} onPress={onClearCache} />
+      <SectionTitle title={t('settings.data')} />
+      <Text style={styles.notice}>{t('settings.backupNotice')}</Text>
+      <PrimaryButton label={t('settings.clearBarcodeCache')} onPress={() => void onClearCache()} />
       <View style={{ height: theme.space.lg }} />
-      <Text style={styles.warn}>{zhTW.settings.clearAllWarning}</Text>
+      <Text style={styles.warn}>{t('settings.clearAllWarning')}</Text>
       <Field
-        label={zhTW.settings.clearAllPrompt}
+        label={t('settings.clearAllPrompt')}
         value={confirmText}
         onChangeText={setConfirmText}
-        placeholder={zhTW.settings.clearAllConfirmPhrase}
+        placeholder={t('settings.clearAllConfirmPhrase')}
       />
-      <PrimaryButton label={zhTW.settings.clearAll} danger onPress={onClearAll} />
+      <PrimaryButton label={t('settings.clearAll')} danger onPress={onClearAll} />
     </ScrollView>
   );
 }

@@ -1,5 +1,9 @@
 import type { BarcodeCacheItem, NutritionBasis } from '../../domain/types';
+import type { SQLiteDatabase } from 'expo-sqlite';
+import { normalizeBarcode } from '../../domain/barcode';
 import { assertWritable, getDb } from '../database';
+
+export { normalizeBarcode } from '../../domain/barcode';
 
 type Row = {
   barcode: string;
@@ -27,10 +31,6 @@ function map(row: Row): BarcodeCacheItem {
   };
 }
 
-export function normalizeBarcode(raw: string): string {
-  return raw.replace(/\s+/g, '');
-}
-
 export async function getBarcodeCache(barcode: string): Promise<BarcodeCacheItem | null> {
   const key = normalizeBarcode(barcode);
   const row = await getDb().getFirstAsync<Row>(
@@ -51,19 +51,22 @@ export async function getBarcodeCache(barcode: string): Promise<BarcodeCacheItem
   }
 }
 
-export async function upsertBarcodeCache(item: {
-  barcode: string;
-  name: string;
-  basis: NutritionBasis;
-  sourceKcal: number;
-  sourceProteinG: number;
-  sourceFatG: number;
-  sourceCarbsG: number;
-}): Promise<void> {
+export async function upsertBarcodeCache(
+  item: {
+    barcode: string;
+    name: string;
+    basis: NutritionBasis;
+    sourceKcal: number;
+    sourceProteinG: number;
+    sourceFatG: number;
+    sourceCarbsG: number;
+  },
+  db: SQLiteDatabase = getDb()
+): Promise<void> {
   assertWritable();
   const key = normalizeBarcode(item.barcode);
   const now = new Date().toISOString();
-  await getDb().runAsync(
+  await db.runAsync(
     `INSERT INTO barcode_cache (barcode, name, basis, source_kcal, source_protein_g, source_fat_g, source_carbs_g, confirmed_at, last_hit_at)
      VALUES (?,?,?,?,?,?,?,?,?)
      ON CONFLICT(barcode) DO UPDATE SET

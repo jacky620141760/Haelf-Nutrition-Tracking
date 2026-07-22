@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { File } from 'expo-file-system';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import NetInfo from '@react-native-community/netinfo';
 import { useApp } from '@/src/context/AppContext';
 import { getAiSettings, setAiConsent, setVisionCapability } from '@/src/db/repositories/aiSettings';
@@ -10,35 +12,102 @@ import { setPendingDraft } from '@/src/services/draftStore';
 import { Field, PrimaryButton } from '@/src/components/ui';
 import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
+import type { MealType } from '@/src/domain/types';
+import { confirmDialog } from '@/src/services/dialog';
 
-/** Strip EXIF by re-encoding via base64 from picker (picker typically strips location on modern OS). */
-async function pickImageStripped(): Promise<{ base64: string; uri: string; mime: string } | null> {
+type PickedImage = { base64: string; uri: string; mime: string; tempUri: string };
+
+function deleteTemporaryImage(uri?: string): void {
+  if (!uri) return;
+  try {
+    const file = new File(uri);
+    if (file.exists) file.delete();
+  } catch {
+    // Cache cleanup is best-effort; the OS can still evict this file.
+  }
+}
+
+async function readUriAsBase64(uri: string): Promise<string> {
+  try {
+    return await new File(uri).base64();
+  } catch {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error('無法讀取圖片'));
+      reader.onload = () => {
+        const dataUrl = String(reader.result ?? '');
+        resolve(dataUrl.slice(dataUrl.indexOf(',') + 1));
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+}
+
+/** Re-encode into a new JPEG cache file so source EXIF is not transmitted. */
+async function pickImageStripped(): Promise<PickedImage | null> {
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ['images'],
-    quality: 0.7,
-    base64: true,
+    quality: 1,
+    base64: false,
     exif: false,
   });
-  if (result.canceled || !result.assets[0]?.base64) return null;
+  if (result.canceled || !result.assets[0]) return null;
   const asset = result.assets[0];
-  return {
-    base64: asset.base64!,
-    uri: asset.uri,
-    mime: asset.mimeType ?? 'image/jpeg',
-  };
+  const context = ImageManipulator.manipulate(asset.uri);
+  const rendered = await context.renderAsync();
+  const encoded = await rendered.saveAsync({
+    format: SaveFormat.JPEG,
+    compress: 0.7,
+  });
+  try {
+    return {
+      base64: await readUriAsBase64(encoded.uri),
+      uri: encoded.uri,
+      tempUri: encoded.uri,
+      mime: 'image/jpeg',
+    };
+  } catch (error) {
+    deleteTemporaryImage(encoded.uri);
+    throw error;
+  }
 }
+
+type AnalyzeRequest = {
+  endpointUrl: string;
+  model: string;
+  text?: string;
+  imageBase64?: string;
+  mimeType?: string;
+  tempUri?: string;
+};
 
 export default function AiFoodScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ meal?: string }>();
+  const meal: MealType = ['breakfast', 'lunch', 'dinner', 'snack'].includes(params.meal ?? '')
+    ? (params.meal as MealType)
+    : 'snack';
   const { isWeb } = useApp();
   const [text, setText] = useState('');
-  const [image, setImage] = useState<{ base64: string; uri: string; mime: string } | null>(null);
+  const [image, setImage] = useState<PickedImage | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [consent, setConsent] = useState(false);
   const [endpoint, setEndpoint] = useState('');
   const [model, setModel] = useState('');
   const [visionOk, setVisionOk] = useState<boolean | null>(null);
+  const requestController = useRef<AbortController | null>(null);
+  const imageRef = useRef<PickedImage | null>(null);
+
+  const replaceImage = (next: PickedImage | null) => {
+    if (imageRef.current?.tempUri !== next?.tempUri) {
+      deleteTemporaryImage(imageRef.current?.tempUri);
+    }
+    imageRef.current = next;
+    setImage(next);
+  };
 
   useEffect(() => {
     (async () => {
@@ -50,50 +119,44 @@ export default function AiFoodScreen() {
     })();
   }, []);
 
+  useEffect(
+    () => () => {
+      requestController.current?.abort();
+      deleteTemporaryImage(imageRef.current?.tempUri);
+    },
+    []
+  );
+
   const ensureConsent = async (): Promise<boolean> => {
     if (consent) return true;
-    return new Promise((resolve) => {
-      Alert.alert(zhTW.ai.consentTitle, zhTW.ai.consentBody, [
-        { text: zhTW.common.cancel, style: 'cancel', onPress: () => resolve(false) },
-        {
-          text: zhTW.ai.consentAgree,
-          onPress: async () => {
-            await setAiConsent(true);
-            setConsent(true);
-            resolve(true);
-          },
-        },
-      ]);
+    const accepted = await confirmDialog(zhTW.ai.consentTitle, zhTW.ai.consentBody, {
+      cancel: zhTW.common.cancel,
+      confirm: zhTW.ai.consentAgree,
     });
+    if (accepted) {
+      await setAiConsent(true);
+      setConsent(true);
+    }
+    return accepted;
   };
 
-  const onAnalyze = async () => {
-    if (!endpoint || !model) {
-      Alert.alert('請先完成 AI 設定', undefined, [
-        { text: '前往設定', onPress: () => router.push('/settings/ai') },
-        { text: zhTW.common.cancel, style: 'cancel' },
-      ]);
-      return;
-    }
-    const net = await NetInfo.fetch();
-    if (!net.isConnected) {
-      Alert.alert('無網路', undefined, [
-        { text: zhTW.barcode.useManual, onPress: () => router.replace('/food/add') },
-      ]);
-      return;
-    }
-    const ok = await ensureConsent();
-    if (!ok) return;
-
+  const runAnalyze = async (request: AnalyzeRequest) => {
+    const controller = new AbortController();
+    requestController.current = controller;
     setBusy(true);
     setStatus(zhTW.common.loading);
     try {
-      let useImage = !!image;
+      let useImage = !!request.imageBase64;
       if (useImage) {
         let cap = visionOk;
         if (cap !== true) {
           setStatus('檢查模型能力…');
-          const result = await checkVisionCapability(endpoint, model);
+          const result = await checkVisionCapability(
+            request.endpointUrl,
+            request.model,
+            controller.signal
+          );
+          if (controller.signal.aborted) return;
           if (result === 'supported') {
             cap = true;
             await setVisionCapability(true);
@@ -104,45 +167,41 @@ export default function AiFoodScreen() {
             useImage = false;
             setStatus(zhTW.ai.capabilityFail);
             Alert.alert(zhTW.ai.capabilityFail);
-            if (!text.trim()) {
-              setBusy(false);
-              return;
-            }
+            if (!request.text?.trim()) return;
           }
         }
       }
 
-      if (!useImage && !text.trim()) {
+      if (!useImage && !request.text?.trim()) {
         Alert.alert('請提供文字描述或可分析的圖片');
-        setBusy(false);
         return;
       }
 
       const result = await analyzeFoodWithAi({
-        endpointUrl: endpoint,
-        model,
-        text: text.trim() || undefined,
-        imageBase64: useImage ? image?.base64 : undefined,
-        mimeType: useImage ? image?.mime : undefined,
+        endpointUrl: request.endpointUrl,
+        model: request.model,
+        text: request.text?.trim() || undefined,
+        imageBase64: useImage ? request.imageBase64 : undefined,
+        mimeType: useImage ? request.mimeType : undefined,
+        signal: controller.signal,
       });
 
-      // Clear temp
-      setImage(null);
-
       if (!result.ok) {
+        if (result.reason === 'cancelled') {
+          setStatus('已取消');
+          return;
+        }
         Alert.alert(result.message, undefined, [
-          { text: zhTW.common.retry, onPress: () => {} },
+          { text: zhTW.common.retry, onPress: () => void runAnalyze(request) },
           { text: zhTW.barcode.useManual, onPress: () => router.replace('/food/add') },
-        ]);
-        setBusy(false);
-        setStatus('');
+        ], { cancelable: false });
         return;
       }
 
       const s = result.suggestion;
       setPendingDraft({
         name: s.name,
-        mealType: 'snack',
+        mealType: meal,
         basis: s.basis,
         sourceKcal: s.kcal,
         sourceProteinG: s.protein_g,
@@ -157,9 +216,42 @@ export default function AiFoodScreen() {
     } catch (e) {
       Alert.alert(e instanceof Error ? e.message : '錯誤');
     } finally {
+      requestController.current = null;
+      deleteTemporaryImage(request.tempUri);
+      if (!request.tempUri || imageRef.current?.tempUri === request.tempUri) {
+        imageRef.current = null;
+        setImage(null);
+      }
       setBusy(false);
       setStatus('');
     }
+  };
+
+  const onAnalyze = async () => {
+    if (!endpoint || !model) {
+      Alert.alert('請先完成 AI 設定', undefined, [
+        { text: '前往設定', onPress: () => router.push('/settings/ai') },
+        { text: zhTW.common.cancel, style: 'cancel' },
+      ]);
+      return;
+    }
+    const net = await NetInfo.fetch();
+    if (net.isConnected === false) {
+      Alert.alert('無網路', undefined, [
+        { text: zhTW.barcode.useManual, onPress: () => router.replace('/food/add') },
+      ]);
+      return;
+    }
+    const ok = await ensureConsent();
+    if (!ok) return;
+    await runAnalyze({
+      endpointUrl: endpoint,
+      model,
+      text: text.trim() || undefined,
+      imageBase64: image?.base64,
+      mimeType: image?.mime,
+      tempUri: image?.tempUri,
+    });
   };
 
   return (
@@ -186,7 +278,7 @@ export default function AiFoodScreen() {
         label={zhTW.ai.pickImage}
         onPress={async () => {
           const img = await pickImageStripped();
-          if (img) setImage(img);
+          if (img) replaceImage(img);
         }}
         disabled={busy}
       />
@@ -196,6 +288,15 @@ export default function AiFoodScreen() {
         onPress={onAnalyze}
         disabled={busy}
       />
+      {busy ? (
+        <>
+          <View style={{ height: theme.space.sm }} />
+          <PrimaryButton
+            label={zhTW.common.cancel}
+            onPress={() => requestController.current?.abort()}
+          />
+        </>
+      ) : null}
       <View style={{ height: theme.space.md }} />
       <PrimaryButton
         label={zhTW.ai.consentWithdraw}
@@ -221,6 +322,6 @@ const styles = StyleSheet.create({
     marginBottom: theme.space.md,
     fontWeight: '600',
   },
-  hint: { marginBottom: theme.space.md, color: theme.colors.accent, fontWeight: '600' },
+  hint: { marginBottom: theme.space.md, color: theme.colors.lakeBlue, fontWeight: '600' },
   preview: { width: '100%', height: 180, borderRadius: theme.radius, marginBottom: theme.space.md },
 });

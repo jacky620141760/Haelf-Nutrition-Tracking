@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useApp } from '@/src/context/AppContext';
 import { getFoodEntry, deleteFoodEntry } from '@/src/db/repositories/food';
-import type { FoodDraft, MealType, NutritionBasis } from '@/src/domain/types';
-import { getTimeZoneMetadata, toLocalDateString } from '@/src/domain/dates';
-import { parseFiniteNumber, validateFoodDraft } from '@/src/domain/validation';
+import type { FoodEntry, MealType, NutritionBasis } from '@/src/domain/types';
+import { validateFoodDraft } from '@/src/domain/validation';
 import { collectDataQualityWarnings } from '@/src/domain/quality';
+import { displayNutrients } from '@/src/domain/nutrition';
 import { confirmFoodDraft } from '@/src/services/confirmFood';
+import { emptyDraft } from '@/src/services/draftStore';
 import { BasisPicker, MealPicker } from '@/src/components/Pickers';
 import { Field, PrimaryButton } from '@/src/components/ui';
+import { NutritionInputFields } from '@/src/components/nutrition/NutritionInputFields';
+import { useFoodNutrientForm } from '@/src/hooks/useFoodNutrientForm';
 import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
 
@@ -18,26 +21,53 @@ export default function EditFoodScreen() {
   const router = useRouter();
   const { bumpRefresh } = useApp();
   const [loaded, setLoaded] = useState(false);
-  const [draft, setDraft] = useState<FoodDraft | null>(null);
-  const [name, setName] = useState('');
-  const [kcal, setKcal] = useState('');
-  const [protein, setProtein] = useState('');
-  const [fat, setFat] = useState('');
-  const [carbs, setCarbs] = useState('');
-  const [qty, setQty] = useState('');
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const form = useFoodNutrientForm(emptyDraft());
+  const {
+    draft,
+    setDraft,
+    name,
+    setName,
+    kcal,
+    protein,
+    fat,
+    carbs,
+    quantity,
+    setQuantity,
+    errors,
+    kcalMode,
+    preview,
+  } = form;
   const [entryLocalDate, setEntryLocalDate] = useState('');
+  const [entryTime, setEntryTime] = useState<
+    Pick<FoodEntry, 'utcTimestamp' | 'localDate' | 'tzIana' | 'tzOffsetMinutes'> | null
+  >(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [qualityConfirmed, setQualityConfirmed] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setEntryTime(null);
+    setEntryLocalDate('');
+    setWarnings([]);
+    setQualityConfirmed(false);
+
     (async () => {
       const entry = await getFoodEntry(Number(id));
+      if (cancelled) return;
       if (!entry) {
         Alert.alert('找不到紀錄');
         router.back();
         return;
       }
       setEntryLocalDate(entry.localDate);
-      setDraft({
+      setEntryTime({
+        utcTimestamp: entry.utcTimestamp,
+        localDate: entry.localDate,
+        tzIana: entry.tzIana,
+        tzOffsetMinutes: entry.tzOffsetMinutes,
+      });
+      form.applyDraft({
         name: entry.name,
         mealType: entry.mealType,
         basis: entry.basis,
@@ -52,17 +82,19 @@ export default function EditFoodScreen() {
         dataQualityWarnings: [],
         utcTimestamp: entry.utcTimestamp,
       });
-      setName(entry.name);
-      setKcal(String(entry.sourceKcal));
-      setProtein(String(entry.sourceProteinG));
-      setFat(String(entry.sourceFatG));
-      setCarbs(String(entry.sourceCarbsG));
-      setQty(String(entry.quantity));
       setLoaded(true);
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [id, router]);
 
-  if (!loaded || !draft) {
+  useEffect(() => {
+    setQualityConfirmed(false);
+  }, [name, kcal, protein, fat, carbs, quantity, draft.basis]);
+
+  if (!loaded || !entryTime) {
     return (
       <View style={styles.center}>
         <Text>{zhTW.common.loading}</Text>
@@ -71,18 +103,7 @@ export default function EditFoodScreen() {
   }
 
   const onSave = async () => {
-    const editedAt = new Date();
-    const tz = getTimeZoneMetadata(editedAt);
-    const d: FoodDraft = {
-      ...draft,
-      name,
-      sourceKcal: parseFiniteNumber(kcal),
-      sourceProteinG: parseFiniteNumber(protein),
-      sourceFatG: parseFiniteNumber(fat),
-      sourceCarbsG: parseFiniteNumber(carbs),
-      quantity: parseFiniteNumber(qty),
-      utcTimestamp: editedAt.toISOString(),
-    };
+    const d = form.buildDraft();
     d.dataQualityWarnings = collectDataQualityWarnings(d);
     const errs = validateFoodDraft({
       name: d.name,
@@ -93,22 +114,18 @@ export default function EditFoodScreen() {
       sourceCarbsG: d.sourceCarbsG,
       quantity: d.quantity,
     });
-    const map: Record<string, string> = {};
-    for (const e of errs) map[e.field] = e.message;
-    setErrors(map);
+    form.setValidationErrors(errs);
+    setWarnings(d.dataQualityWarnings);
     if (errs.length) return;
+    if (d.dataQualityWarnings.length && !qualityConfirmed) {
+      Alert.alert(zhTW.food.qualityWarning, d.dataQualityWarnings.join('\n'));
+      return;
+    }
 
-    // Recompute local date from edited time (Req 5.3)
-    const newLocal = toLocalDateString(editedAt);
-    const result = await confirmFoodDraft(
-      {
-        ...d,
-        utcTimestamp: editedAt.toISOString(),
-      },
-      { localDate: newLocal, editId: Number(id) }
-    );
-    // Also update TZ on edit via updateFoodEntry path - confirmFood uses device TZ
-    void tz;
+    const result = await confirmFoodDraft(d, {
+      editId: Number(id),
+      originalTime: entryTime,
+    });
     if (!result.ok) {
       Alert.alert('驗證失敗', result.errors.join('\n'));
       return;
@@ -129,17 +146,50 @@ export default function EditFoodScreen() {
         value={draft.basis}
         onChange={(basis: NutritionBasis) => setDraft({ ...draft, basis })}
       />
-      <Field label={zhTW.food.kcal} value={kcal} onChangeText={setKcal} keyboardType="decimal-pad" error={errors.kcal} />
-      <Field label={zhTW.food.protein} value={protein} onChangeText={setProtein} keyboardType="decimal-pad" error={errors.protein_g} />
-      <Field label={zhTW.food.fat} value={fat} onChangeText={setFat} keyboardType="decimal-pad" error={errors.fat_g} />
-      <Field label={zhTW.food.carbs} value={carbs} onChangeText={setCarbs} keyboardType="decimal-pad" error={errors.carbs_g} />
+      <NutritionInputFields
+        kcal={kcal}
+        protein={protein}
+        fat={fat}
+        carbs={carbs}
+        mode={kcalMode}
+        errors={errors}
+        onKcalChange={form.onKcalChange}
+        onProteinChange={form.onProteinChange}
+        onFatChange={form.onFatChange}
+        onCarbsChange={form.onCarbsChange}
+        onRelink={form.relinkKcal}
+      />
       <Field
         label={draft.basis === 'PER_100_G' ? zhTW.food.quantityG : zhTW.food.quantityServing}
-        value={qty}
-        onChangeText={setQty}
+        value={quantity}
+        onChangeText={setQuantity}
         keyboardType="decimal-pad"
         error={errors.quantity}
       />
+      {preview ? (
+        <Text style={styles.preview}>
+          {zhTW.diary.intake}：{displayNutrients(preview).kcal} kcal · P
+          {displayNutrients(preview).protein_g} F{displayNutrients(preview).fat_g} C
+          {displayNutrients(preview).carbs_g}
+        </Text>
+      ) : null}
+      {warnings.length ? (
+        <View style={styles.warnBox} accessibilityRole="alert">
+          <Text style={styles.warnTitle}>⚠ {zhTW.food.qualityWarning}</Text>
+          {warnings.map((warning) => (
+            <Text key={warning} style={styles.warnText}>{warning}</Text>
+          ))}
+          <Pressable
+            onPress={() => setQualityConfirmed((value) => !value)}
+            style={styles.checkRow}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: qualityConfirmed }}
+            accessibilityLabel={zhTW.food.qualityConfirm}
+          >
+            <Text>{qualityConfirmed ? '☑' : '☐'} {zhTW.food.qualityConfirm}</Text>
+          </Pressable>
+        </View>
+      ) : null}
       <PrimaryButton label={zhTW.common.save} onPress={onSave} />
       <View style={{ height: theme.space.md }} />
       <PrimaryButton
@@ -169,4 +219,14 @@ const styles = StyleSheet.create({
   content: { padding: theme.space.md },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   meta: { color: theme.colors.textMuted, marginBottom: theme.space.md },
+  preview: { marginBottom: theme.space.md, fontWeight: '600', color: theme.colors.text },
+  warnBox: {
+    backgroundColor: theme.colors.warningBg,
+    padding: theme.space.md,
+    borderRadius: theme.radius,
+    marginBottom: theme.space.md,
+  },
+  warnTitle: { fontWeight: '700', color: theme.colors.warning, marginBottom: 4 },
+  warnText: { color: theme.colors.warning },
+  checkRow: { marginTop: theme.space.sm, minHeight: theme.minTouch, justifyContent: 'center' },
 });

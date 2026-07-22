@@ -1,30 +1,35 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import { Link, useFocusEffect, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useApp } from '@/src/context/AppContext';
 import {
+  deleteFoodEntries,
   deleteFoodEntry,
   listFoodEntriesByDate,
 } from '@/src/db/repositories/food';
-import { listGoalVersions } from '@/src/db/repositories/goals';
-import { resolveGoalForDate } from '@/src/domain/goals';
-import { displayNutrients, sumNutrients } from '@/src/domain/nutrition';
-import { addLocalDays } from '@/src/domain/dates';
+import { setDiaryCompleted } from '@/src/db/repositories/diaryStatus';
 import type { FoodEntry, MealType } from '@/src/domain/types';
-import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
-import { PrimaryButton } from '@/src/components/ui';
+import { DailyNutritionHero } from '@/src/components/nutrition/DailyNutritionHero';
+import { MealSection } from '@/src/components/mfp/MealSection';
+import { WeekDateStrip } from '@/src/components/today/WeekDateStrip';
+import { HealthyHabits } from '@/src/components/today/HealthyHabits';
+import { useDiaryDay } from '@/src/hooks/useDiaryDay';
+import { displayWeightKg } from '@/src/domain/nutrition';
+import { MfpButton, MfpCard } from '@/src/components/ui';
+import { addLocalDays } from '@/src/domain/dates';
+import { copyMealEntries } from '@/src/services/copyMeal';
+import { chooseAction, confirmDialog } from '@/src/services/dialog';
 
 const MEAL_ORDER: MealType[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 
-export default function TodayScreen() {
+export default function DiaryScreen() {
   const {
     selectedDate,
     setSelectedDate,
@@ -33,37 +38,14 @@ export default function TodayScreen() {
     goToToday,
     refreshToken,
     bumpRefresh,
+    preferences,
+    t,
   } = useApp();
   const router = useRouter();
-  const [entries, setEntries] = useState<FoodEntry[]>([]);
-  const [goalLabel, setGoalLabel] = useState<string>(zhTW.common.notSet);
-
-  const load = useCallback(async () => {
-    const list = await listFoodEntriesByDate(selectedDate);
-    setEntries(list);
-    const versions = await listGoalVersions();
-    const g = resolveGoalForDate(versions, selectedDate);
-    if (!g) setGoalLabel(zhTW.common.notSet);
-    else {
-      const d = displayNutrients({
-        kcal: g.kcal,
-        protein_g: g.proteinG,
-        fat_g: g.fatG,
-        carbs_g: g.carbsG,
-      });
-      setGoalLabel(`${d.kcal} kcal · P${d.protein_g} F${d.fat_g} C${d.carbs_g}`);
-    }
-  }, [selectedDate]);
-
-  useFocusEffect(
-    useCallback(() => {
-      load();
-    }, [load, refreshToken])
+  const { entries, summary, latestWeight, streak, reload } = useDiaryDay(
+    selectedDate,
+    refreshToken
   );
-
-  useEffect(() => {
-    load();
-  }, [load, refreshToken]);
 
   const grouped = useMemo(() => {
     const map: Record<MealType, FoodEntry[]> = {
@@ -76,204 +58,175 @@ export default function TodayScreen() {
     return map;
   }, [entries]);
 
-  const totals = useMemo(() => {
-    const raw = sumNutrients(
-      entries.map((e) => ({
-        kcal: e.snapKcal,
-        protein_g: e.snapProteinG,
-        fat_g: e.snapFatG,
-        carbs_g: e.snapCarbsG,
-      }))
-    );
-    return displayNutrients(raw);
-  }, [entries]);
+  const goal = summary?.goal
+    ? {
+        kcal: summary.goal.kcal,
+        protein_g: summary.goal.proteinG,
+        fat_g: summary.goal.fatG,
+        carbs_g: summary.goal.carbsG,
+      }
+    : null;
 
-  const onDelete = (entry: FoodEntry) => {
-    Alert.alert(zhTW.diary.deleteConfirmTitle, zhTW.diary.deleteConfirmMessage, [
-      { text: zhTW.common.cancel, style: 'cancel' },
-      {
-        text: zhTW.common.delete,
-        style: 'destructive',
-        onPress: async () => {
-          await deleteFoodEntry(entry.id);
-          bumpRefresh();
-          load();
-        },
-      },
-    ]);
+  const onDelete = async (entry: FoodEntry) => {
+    const confirmed = await confirmDialog(
+      t('diary.deleteConfirmTitle'),
+      t('diary.deleteConfirmMessage'),
+      { cancel: t('common.cancel'), confirm: t('common.delete') }
+    );
+    if (!confirmed) return;
+    await deleteFoodEntry(entry.id);
+    bumpRefresh();
+    void reload();
+  };
+
+  const onMealMenu = async (meal: MealType) => {
+    const mealEntries = grouped[meal];
+    const actions = [
+      { label: t('copy.yesterday') },
+      { label: t('copy.toDateMeal') },
+      { label: t('copy.saveAsMeal') },
+      ...(mealEntries.length
+        ? [{ label: t('copy.deleteMeal'), destructive: true }]
+        : []),
+    ];
+    const action = await chooseAction(t(`meal.${meal}`), actions, t('common.cancel'));
+    if (action === 0) {
+      const yesterday = await listFoodEntriesByDate(addLocalDays(selectedDate, -1));
+      const source = yesterday.filter((entry) => entry.mealType === meal);
+      await copyMealEntries(source.map((entry) => entry.id), {
+        targetDate: selectedDate,
+        targetMeal: meal,
+      });
+      bumpRefresh();
+    } else if (action === 1) {
+      router.push(`/diary/copy?sourceDate=${selectedDate}&sourceMeal=${meal}` as never);
+    } else if (action === 2) {
+      router.push(`/library/meal/new?date=${selectedDate}&meal=${meal}` as never);
+    } else if (action === 3) {
+      await deleteFoodEntries(mealEntries.map((entry) => entry.id));
+      bumpRefresh();
+    }
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={styles.dateRow}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="前一日"
-          style={styles.dateBtn}
-          onPress={() => setSelectedDate(addLocalDays(selectedDate, -1))}
-        >
-          <Text style={styles.dateBtnText}>‹</Text>
-        </Pressable>
-        <View style={styles.dateCenter}>
-          <Text style={styles.dateText} accessibilityRole="header">
-            {selectedDate}
-          </Text>
+    <View style={styles.root}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        <WeekDateStrip
+          selectedDate={selectedDate}
+          todayDate={todayLocalDate}
+          weekStart={preferences.weekStart}
+          locale={preferences.locale}
+          onSelect={setSelectedDate}
+        />
+        <View style={styles.dayHeading}>
+          <View>
+            <Text style={styles.dateText} accessibilityRole="header">{selectedDate}</Text>
+            <Text style={styles.streak}>🔥 {streak} {t('diary.streak')}</Text>
+          </View>
           {viewingHistory ? (
-            <Pressable onPress={goToToday} accessibilityRole="button" accessibilityLabel={zhTW.common.today}>
-              <Text style={styles.todayLink}>{zhTW.common.today}</Text>
+            <Pressable onPress={goToToday} accessibilityRole="button">
+              <Text style={styles.todayLink}>{t('common.today')}</Text>
             </Pressable>
-          ) : (
-            <Text style={styles.todayHint}>{todayLocalDate === selectedDate ? '今日' : ''}</Text>
-          )}
+          ) : null}
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="後一日"
-          style={styles.dateBtn}
-          onPress={() => setSelectedDate(addLocalDays(selectedDate, 1))}
-        >
-          <Text style={styles.dateBtnText}>›</Text>
-        </Pressable>
-      </View>
 
-      <View style={styles.summary} accessibilityLabel={`${zhTW.diary.total} ${totals.kcal} kcal`}>
-        <Text style={styles.summaryTitle}>
-          {zhTW.diary.total}：{totals.kcal} kcal
-        </Text>
-        <Text style={styles.summarySub}>
-          P {totals.protein_g} · F {totals.fat_g} · C {totals.carbs_g}
-        </Text>
-        <Text style={styles.goal}>
-          {zhTW.diary.goal}：{goalLabel}
-        </Text>
-      </View>
+        <DailyNutritionHero
+          consumed={summary?.food ?? { kcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0 }}
+          goal={goal}
+          exerciseKcal={summary?.exerciseKcal ?? 0}
+        />
 
-      <View style={styles.actions}>
-        <PrimaryButton label={zhTW.diary.manual} onPress={() => router.push('/food/add')} />
-        <PrimaryButton label={zhTW.diary.barcode} onPress={() => router.push('/food/scan')} />
-        <PrimaryButton label={zhTW.diary.ai} onPress={() => router.push('/food/ai')} />
-      </View>
+        <View style={styles.quickLinks}>
+          <Pressable
+            onPress={() => router.push('/food/log' as never)}
+            style={styles.quickLink}
+            accessibilityRole="button"
+          >
+            <Text style={styles.quickLinkText}>{t('foodHub.title')}</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/food/ai')}
+            style={styles.quickLink}
+            accessibilityRole="button"
+          >
+            <Text style={styles.quickLinkText}>{t('diary.ai')}</Text>
+          </Pressable>
+        </View>
 
-      {entries.length === 0 ? (
-        <Text style={styles.empty}>{zhTW.diary.empty}</Text>
-      ) : (
-        MEAL_ORDER.map((meal) => {
-          const list = grouped[meal];
-          if (!list.length) return null;
-          return (
-            <View key={meal} style={styles.section}>
-              <View style={[styles.mealHeader, { borderLeftColor: theme.colors.mealAccent[meal] }]}>
-                <Text style={styles.mealTitle}>{zhTW.meal[meal]}</Text>
-                <Text style={styles.mealShape}>◆</Text>
-              </View>
-              {list.map((e) => {
-                const d = displayNutrients({
-                  kcal: e.snapKcal,
-                  protein_g: e.snapProteinG,
-                  fat_g: e.snapFatG,
-                  carbs_g: e.snapCarbsG,
-                });
-                return (
-                  <Pressable
-                    key={e.id}
-                    style={styles.entry}
-                    onPress={() => router.push(`/food/edit/${e.id}`)}
-                    onLongPress={() => onDelete(e)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${e.name} ${d.kcal} 千卡`}
-                    accessibilityHint="點擊編輯，長按刪除"
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.entryName}>{e.name}</Text>
-                      <Text style={styles.entryMeta}>
-                        {d.kcal} kcal · P{d.protein_g} F{d.fat_g} C{d.carbs_g}
-                      </Text>
-                    </View>
-                    <Pressable
-                      onPress={() => onDelete(e)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${zhTW.common.delete} ${e.name}`}
-                      style={styles.deleteHit}
-                    >
-                      <Text style={styles.deleteText}>{zhTW.common.delete}</Text>
-                    </Pressable>
-                  </Pressable>
-                );
-              })}
-            </View>
-          );
-        })
-      )}
+        {MEAL_ORDER.map((meal) => (
+          <MealSection
+            key={meal}
+            meal={meal}
+            entries={grouped[meal]}
+            onAdd={() => router.push(`/food/log?meal=${meal}` as never)}
+            onEdit={(e) => router.push(`/food/edit/${e.id}`)}
+            onDelete={(entry) => void onDelete(entry)}
+            onMenu={() => void onMealMenu(meal)}
+          />
+        ))}
 
-      <Link href="/food/add?tab=favorites" asChild>
-        <Pressable style={styles.linkBtn} accessibilityRole="button">
-          <Text style={styles.linkText}>{zhTW.diary.favorites} / {zhTW.diary.recent}</Text>
-        </Pressable>
-      </Link>
-    </ScrollView>
+        {summary ? (
+          <HealthyHabits
+            summary={summary}
+            onWater={() => router.push('/water' as never)}
+            onExercise={() => router.push('/exercise' as never)}
+            onSteps={() => router.push('/steps' as never)}
+          />
+        ) : null}
+
+        <View style={styles.bottomCards}>
+          <MfpCard>
+            <Pressable onPress={() => router.push('/weight')} accessibilityRole="button">
+              <Text style={styles.cardTitle}>{t('weight.title')}</Text>
+              <Text style={styles.cardValue}>
+                {latestWeight ? `${displayWeightKg(latestWeight.kg)} kg` : t('common.notRecorded')}
+              </Text>
+            </Pressable>
+          </MfpCard>
+          <MfpButton
+            label={summary?.completedAt ? t('diary.completed') : t('diary.complete')}
+            variant={summary?.completedAt ? 'secondary' : 'primary'}
+            onPress={async () => {
+              await setDiaryCompleted(selectedDate, !summary?.completedAt);
+              bumpRefresh();
+            }}
+          />
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: theme.colors.bg },
   container: { flex: 1, backgroundColor: theme.colors.bg },
-  content: { padding: theme.space.md, paddingBottom: theme.space.xl },
-  dateRow: {
+  content: { paddingBottom: theme.space.xl },
+  dayHeading: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: theme.space.md,
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.space.sm,
+    paddingVertical: theme.space.sm,
   },
-  dateBtn: {
-    minWidth: theme.minTouch,
-    minHeight: theme.minTouch,
-    alignItems: 'center',
+  dateText: {
+    fontSize: theme.font.section,
+    fontWeight: '700',
+    color: theme.colors.text,
+  },
+  todayLink: { color: theme.colors.lakeBlue, marginTop: 4, fontWeight: '600' },
+  streak: { color: theme.colors.textMuted, marginTop: 2, fontSize: theme.font.bodySmall },
+  quickLinks: {
+    flexDirection: 'row',
     justifyContent: 'center',
+    gap: theme.space.lg,
+    paddingVertical: theme.space.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
   },
-  dateBtnText: { fontSize: 28, color: theme.colors.accent, fontWeight: '700' },
-  dateCenter: { flex: 1, alignItems: 'center' },
-  dateText: { fontSize: theme.font.title, fontWeight: '700', color: theme.colors.text },
-  todayLink: { color: theme.colors.accent, marginTop: 4, fontWeight: '600' },
-  todayHint: { color: theme.colors.textMuted, marginTop: 4 },
-  summary: {
-    backgroundColor: theme.colors.accentSoft,
-    padding: theme.space.md,
-    borderRadius: theme.radius,
-    marginBottom: theme.space.md,
-  },
-  summaryTitle: { fontSize: theme.font.body, fontWeight: '700', color: theme.colors.text },
-  summarySub: { color: theme.colors.textMuted, marginTop: 4 },
-  goal: { marginTop: 8, color: theme.colors.text },
-  actions: { gap: theme.space.sm, marginBottom: theme.space.lg },
-  empty: { textAlign: 'center', color: theme.colors.textMuted, marginVertical: theme.space.lg },
-  section: { marginBottom: theme.space.lg },
-  mealHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderLeftWidth: 4,
-    paddingLeft: theme.space.sm,
-    marginBottom: theme.space.sm,
-    gap: theme.space.sm,
-  },
-  mealTitle: { fontSize: theme.font.body, fontWeight: '700' },
-  mealShape: { color: theme.colors.textMuted },
-  entry: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.bgElevated,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius,
-    padding: theme.space.md,
-    marginBottom: theme.space.sm,
-    minHeight: theme.minTouch,
-  },
-  entryName: { fontWeight: '600', color: theme.colors.text },
-  entryMeta: { color: theme.colors.textMuted, marginTop: 2, fontSize: theme.font.small },
-  deleteHit: { minWidth: theme.minTouch, minHeight: theme.minTouch, justifyContent: 'center' },
-  deleteText: { color: theme.colors.danger, fontWeight: '600' },
-  linkBtn: {
-    minHeight: theme.minTouch,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  linkText: { color: theme.colors.accent, fontWeight: '600' },
+  quickLink: { minHeight: theme.minTouch, justifyContent: 'center' },
+  quickLinkText: { color: theme.colors.lakeBlue, fontWeight: '600', fontSize: 14 },
+  bottomCards: { padding: theme.space.md, backgroundColor: theme.colors.surface },
+  cardTitle: { color: theme.colors.textMuted, fontWeight: '600' },
+  cardValue: { color: theme.colors.text, fontSize: 24, fontWeight: '700', marginTop: theme.space.xs },
 });

@@ -1,54 +1,58 @@
 import { Tabs } from 'expo-router';
-import { Text } from 'react-native';
-import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
-
-function TabIcon({ label, color }: { label: string; color: string | undefined }) {
-  return (
-    <Text style={{ color: color ?? theme.colors.textMuted, fontSize: 12, fontWeight: '700' }} accessibilityElementsHidden>
-      {label.slice(0, 1)}
-    </Text>
-  );
-}
+import { HaelfTabBar } from '@/src/components/navigation/HaelfTabBar';
+import { useApp } from '@/src/context/AppContext';
 
 export default function TabLayout() {
+  const { t } = useApp();
   return (
     <Tabs
+      tabBar={(props) => <HaelfTabBar {...props} />}
       screenOptions={{
-        tabBarActiveTintColor: theme.colors.accent,
-        tabBarInactiveTintColor: theme.colors.textMuted,
+        tabBarActiveTintColor: theme.colors.lakeBlue,
+        tabBarInactiveTintColor: theme.colors.textMute,
         tabBarStyle: {
-          backgroundColor: theme.colors.bgElevated,
+          backgroundColor: theme.colors.bg,
           borderTopColor: theme.colors.border,
           minHeight: 56,
+          paddingTop: 4,
         },
         headerStyle: { backgroundColor: theme.colors.bg },
         headerTintColor: theme.colors.text,
-        tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
+        headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+        tabBarLabelStyle: {
+          fontSize: theme.font.tab,
+          fontWeight: '600',
+          letterSpacing: 0.2,
+        },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: zhTW.tabs.today,
-          tabBarIcon: ({ color }) => <TabIcon label={zhTW.tabs.today} color={String(color)} />,
-          tabBarAccessibilityLabel: zhTW.tabs.today,
+          title: t('tabs.today'),
+          tabBarAccessibilityLabel: t('tabs.today'),
         }}
       />
       <Tabs.Screen
         name="stats"
         options={{
-          title: zhTW.tabs.stats,
-          tabBarIcon: ({ color }) => <TabIcon label={zhTW.tabs.stats} color={String(color)} />,
-          tabBarAccessibilityLabel: zhTW.tabs.stats,
+          title: t('tabs.progress'),
+          tabBarAccessibilityLabel: t('tabs.progress'),
+        }}
+      />
+      <Tabs.Screen
+        name="library"
+        options={{
+          title: t('tabs.library'),
+          tabBarAccessibilityLabel: t('tabs.library'),
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
-          title: zhTW.tabs.settings,
-          tabBarIcon: ({ color }) => <TabIcon label={zhTW.tabs.settings} color={String(color)} />,
-          tabBarAccessibilityLabel: zhTW.tabs.settings,
+          title: t('tabs.more'),
+          tabBarAccessibilityLabel: t('tabs.more'),
         }}
       />
     </Tabs>

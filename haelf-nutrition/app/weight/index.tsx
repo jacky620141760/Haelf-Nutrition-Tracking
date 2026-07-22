@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useApp } from '@/src/context/AppContext';
@@ -6,12 +6,13 @@ import {
   createWeightEntry,
   deleteWeightEntry,
   listWeightsByDate,
+  updateWeightEntry,
 } from '@/src/db/repositories/weight';
 import { getTimeZoneMetadata, toLocalDateString, utcNowIso, addLocalDays } from '@/src/domain/dates';
 import { displayWeightKg } from '@/src/domain/nutrition';
 import { parseFiniteNumber, validateWeightKg } from '@/src/domain/validation';
 import type { WeightEntry } from '@/src/domain/types';
-import { Field, PrimaryButton, SectionTitle } from '@/src/components/ui';
+import { Field, MfpButton, PrimaryButton, SectionTitle } from '@/src/components/ui';
 import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
 
@@ -20,6 +21,7 @@ export default function WeightScreen() {
   const [entries, setEntries] = useState<WeightEntry[]>([]);
   const [kg, setKg] = useState('');
   const [error, setError] = useState('');
+  const [editing, setEditing] = useState<WeightEntry | null>(null);
 
   const load = useCallback(async () => {
     setEntries(await listWeightsByDate(selectedDate));
@@ -31,7 +33,13 @@ export default function WeightScreen() {
     }, [load, refreshToken])
   );
 
-  const onAdd = async () => {
+  useEffect(() => {
+    setEditing(null);
+    setKg('');
+    setError('');
+  }, [selectedDate]);
+
+  const onSubmit = async () => {
     const value = parseFiniteNumber(kg);
     const err = validateWeightKg(value);
     if (err || value == null) {
@@ -39,15 +47,26 @@ export default function WeightScreen() {
       return;
     }
     setError('');
-    const now = new Date();
-    const tz = getTimeZoneMetadata(now);
-    await createWeightEntry({
-      kg: value,
-      utcTimestamp: utcNowIso(now),
-      localDate: selectedDate || toLocalDateString(now),
-      tzIana: tz.iana,
-      tzOffsetMinutes: tz.utcOffsetMinutes,
-    });
+    if (editing) {
+      await updateWeightEntry(editing.id, {
+        kg: value,
+        utcTimestamp: editing.utcTimestamp,
+        localDate: editing.localDate,
+        tzIana: editing.tzIana,
+        tzOffsetMinutes: editing.tzOffsetMinutes,
+      });
+      setEditing(null);
+    } else {
+      const now = new Date();
+      const tz = getTimeZoneMetadata(now);
+      await createWeightEntry({
+        kg: value,
+        utcTimestamp: utcNowIso(now),
+        localDate: selectedDate || toLocalDateString(now),
+        tzIana: tz.iana,
+        tzOffsetMinutes: tz.utcOffsetMinutes,
+      });
+    }
     setKg('');
     bumpRefresh();
     load();
@@ -81,7 +100,24 @@ export default function WeightScreen() {
         keyboardType="decimal-pad"
         error={error}
       />
-      <PrimaryButton label={zhTW.weight.add} onPress={onAdd} />
+      <PrimaryButton
+        label={editing ? '儲存體重修改' : zhTW.weight.add}
+        onPress={onSubmit}
+      />
+      {editing ? (
+        <>
+          <View style={{ height: theme.space.sm }} />
+          <MfpButton
+            label={zhTW.common.cancel}
+            variant="outline"
+            onPress={() => {
+              setEditing(null);
+              setKg('');
+              setError('');
+            }}
+          />
+        </>
+      ) : null}
 
       <View style={{ height: theme.space.lg }} />
       {entries.length === 0 ? (
@@ -93,6 +129,18 @@ export default function WeightScreen() {
               <Text style={styles.kg}>{displayWeightKg(e.kg)} kg</Text>
               <Text style={styles.meta}>{e.utcTimestamp}</Text>
             </View>
+            <Pressable
+              style={styles.action}
+              accessibilityRole="button"
+              accessibilityLabel={`${zhTW.common.edit} ${displayWeightKg(e.kg)} 公斤`}
+              onPress={() => {
+                setEditing(e);
+                setKg(String(e.kg));
+                setError('');
+              }}
+            >
+              <Text style={styles.editText}>{zhTW.common.edit}</Text>
+            </Pressable>
             <Pressable
               style={styles.del}
               accessibilityRole="button"
@@ -131,19 +179,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dateBtnText: { fontSize: 28, color: theme.colors.accent, fontWeight: '700' },
-  dateText: { flex: 1, textAlign: 'center', fontWeight: '700', fontSize: theme.font.body },
+  dateBtnText: { fontSize: 28, color: theme.colors.lakeBlue, fontWeight: '700' },
+  dateText: { flex: 1, textAlign: 'center', fontWeight: '700', fontSize: theme.font.body, color: theme.colors.text },
   empty: { textAlign: 'center', color: theme.colors.textMuted },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
     paddingVertical: theme.space.sm,
     minHeight: theme.minTouch,
   },
-  kg: { fontWeight: '700', fontSize: theme.font.body },
+  kg: { fontWeight: '700', fontSize: theme.font.body, color: theme.colors.text, fontVariant: ['tabular-nums'] },
   meta: { color: theme.colors.textMuted, fontSize: theme.font.small },
   del: { minWidth: theme.minTouch, minHeight: theme.minTouch, justifyContent: 'center' },
+  action: { minWidth: theme.minTouch, minHeight: theme.minTouch, justifyContent: 'center' },
+  editText: { color: theme.colors.lakeBlue, fontWeight: '600' },
   delText: { color: theme.colors.danger, fontWeight: '600' },
 });

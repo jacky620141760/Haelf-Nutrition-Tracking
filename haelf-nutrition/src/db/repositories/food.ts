@@ -1,6 +1,7 @@
 import type { FoodCatalogItem, FoodEntry, MealType, NutritionBasis, FoodSource } from '../../domain/types';
+import type { SQLiteDatabase } from 'expo-sqlite';
 import { computeSnapshot } from '../../domain/nutrition';
-import { assertWritable, getDb } from '../database';
+import { assertWritable, getDb, runInTransaction } from '../database';
 
 type FoodRow = {
   id: number;
@@ -19,6 +20,7 @@ type FoodRow = {
   source: FoodSource;
   catalog_id: number | null;
   barcode: string | null;
+  log_group_id: string | null;
   utc_timestamp: string;
   local_date: string;
   tz_iana: string;
@@ -45,6 +47,7 @@ function mapFood(row: FoodRow): FoodEntry {
     source: row.source,
     catalogId: row.catalog_id,
     barcode: row.barcode,
+    logGroupId: row.log_group_id,
     utcTimestamp: row.utc_timestamp,
     localDate: row.local_date,
     tzIana: row.tz_iana,
@@ -93,13 +96,17 @@ export type CreateFoodInput = {
   source: FoodSource;
   catalogId?: number | null;
   barcode?: string | null;
+  logGroupId?: string | null;
   utcTimestamp: string;
   localDate: string;
   tzIana: string;
   tzOffsetMinutes: number;
 };
 
-export async function createFoodEntry(input: CreateFoodInput): Promise<number> {
+export async function createFoodEntry(
+  input: CreateFoodInput,
+  db: SQLiteDatabase = getDb()
+): Promise<number> {
   assertWritable();
   const snap = computeSnapshot(input.basis, {
     kcal: input.sourceKcal,
@@ -108,13 +115,12 @@ export async function createFoodEntry(input: CreateFoodInput): Promise<number> {
     carbs_g: input.sourceCarbsG,
   }, input.quantity);
   const now = new Date().toISOString();
-  const db = getDb();
   const result = await db.runAsync(
     `INSERT INTO food_entries (
       name, meal_type, basis, source_kcal, source_protein_g, source_fat_g, source_carbs_g,
-      quantity, snap_kcal, snap_protein_g, snap_fat_g, snap_carbs_g, source, catalog_id, barcode,
+      quantity, snap_kcal, snap_protein_g, snap_fat_g, snap_carbs_g, source, catalog_id, barcode, log_group_id,
       utc_timestamp, local_date, tz_iana, tz_offset_minutes, created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       input.name,
       input.mealType,
@@ -131,6 +137,7 @@ export async function createFoodEntry(input: CreateFoodInput): Promise<number> {
       input.source,
       input.catalogId ?? null,
       input.barcode ?? null,
+      input.logGroupId ?? null,
       input.utcTimestamp,
       input.localDate,
       input.tzIana,
@@ -144,7 +151,8 @@ export async function createFoodEntry(input: CreateFoodInput): Promise<number> {
 
 export async function updateFoodEntry(
   id: number,
-  input: CreateFoodInput
+  input: CreateFoodInput,
+  db: SQLiteDatabase = getDb()
 ): Promise<void> {
   assertWritable();
   const snap = computeSnapshot(input.basis, {
@@ -154,11 +162,10 @@ export async function updateFoodEntry(
     carbs_g: input.sourceCarbsG,
   }, input.quantity);
   const now = new Date().toISOString();
-  const db = getDb();
   await db.runAsync(
     `UPDATE food_entries SET
       name=?, meal_type=?, basis=?, source_kcal=?, source_protein_g=?, source_fat_g=?, source_carbs_g=?,
-      quantity=?, snap_kcal=?, snap_protein_g=?, snap_fat_g=?, snap_carbs_g=?, source=?, catalog_id=?, barcode=?,
+      quantity=?, snap_kcal=?, snap_protein_g=?, snap_fat_g=?, snap_carbs_g=?, source=?, catalog_id=?, barcode=?, log_group_id=?,
       utc_timestamp=?, local_date=?, tz_iana=?, tz_offset_minutes=?, updated_at=?
      WHERE id=?`,
     [
@@ -177,6 +184,7 @@ export async function updateFoodEntry(
       input.source,
       input.catalogId ?? null,
       input.barcode ?? null,
+      input.logGroupId ?? null,
       input.utcTimestamp,
       input.localDate,
       input.tzIana,
@@ -190,6 +198,15 @@ export async function updateFoodEntry(
 export async function deleteFoodEntry(id: number): Promise<void> {
   assertWritable();
   await getDb().runAsync(`DELETE FROM food_entries WHERE id = ?`, [id]);
+}
+
+export async function deleteFoodEntries(ids: number[]): Promise<void> {
+  if (!ids.length) return;
+  await runInTransaction(async (txn) => {
+    for (const id of ids) {
+      await txn.runAsync(`DELETE FROM food_entries WHERE id=?`, [id]);
+    }
+  });
 }
 
 type CatalogRow = {
@@ -224,18 +241,20 @@ function mapCatalog(row: CatalogRow): FoodCatalogItem {
   };
 }
 
-export async function upsertCatalogFromConfirmed(input: {
-  name: string;
-  basis: NutritionBasis;
-  sourceKcal: number;
-  sourceProteinG: number;
-  sourceFatG: number;
-  sourceCarbsG: number;
-  barcode?: string | null;
-  existingId?: number | null;
-}): Promise<number> {
+export async function upsertCatalogFromConfirmed(
+  input: {
+    name: string;
+    basis: NutritionBasis;
+    sourceKcal: number;
+    sourceProteinG: number;
+    sourceFatG: number;
+    sourceCarbsG: number;
+    barcode?: string | null;
+    existingId?: number | null;
+  },
+  db: SQLiteDatabase = getDb()
+): Promise<number> {
   assertWritable();
-  const db = getDb();
   const now = new Date().toISOString();
   if (input.existingId) {
     await db.runAsync(
@@ -275,10 +294,13 @@ export async function upsertCatalogFromConfirmed(input: {
   return result.lastInsertRowId;
 }
 
-export async function touchCatalogUsed(id: number): Promise<void> {
+export async function touchCatalogUsed(
+  id: number,
+  db: SQLiteDatabase = getDb()
+): Promise<void> {
   assertWritable();
   const now = new Date().toISOString();
-  await getDb().runAsync(
+  await db.runAsync(
     `UPDATE food_catalog SET last_used_at=?, updated_at=? WHERE id=?`,
     [now, now, id]
   );
@@ -308,22 +330,32 @@ export async function listRecent(limit = 20): Promise<FoodCatalogItem[]> {
   return rows.map(mapCatalog);
 }
 
+export async function listCatalog(search = ''): Promise<FoodCatalogItem[]> {
+  const query = search.trim();
+  const rows = query
+    ? await getDb().getAllAsync<CatalogRow>(
+        `SELECT * FROM food_catalog WHERE name LIKE ? ESCAPE '\\'
+         ORDER BY is_favorite DESC, last_used_at DESC, name COLLATE NOCASE`,
+        [`%${query.replace(/[\\%_]/g, '\\$&')}%`]
+      )
+    : await getDb().getAllAsync<CatalogRow>(
+        `SELECT * FROM food_catalog ORDER BY is_favorite DESC, last_used_at DESC, name COLLATE NOCASE`
+      );
+  return rows.map(mapCatalog);
+}
+
 export async function deleteCatalogItem(id: number): Promise<void> {
-  assertWritable();
-  const db = getDb();
-  const item = await db.getFirstAsync<CatalogRow>(`SELECT * FROM food_catalog WHERE id=?`, [id]);
-  await db.execAsync('BEGIN');
-  try {
+  await runInTransaction(async (txn) => {
+    const item = await txn.getFirstAsync<CatalogRow>(
+      `SELECT * FROM food_catalog WHERE id=?`,
+      [id]
+    );
     if (item?.barcode) {
-      await db.runAsync(`DELETE FROM barcode_cache WHERE barcode = ?`, [item.barcode]);
+      await txn.runAsync(`DELETE FROM barcode_cache WHERE barcode = ?`, [item.barcode]);
     }
-    await db.runAsync(`UPDATE food_entries SET catalog_id = NULL WHERE catalog_id = ?`, [id]);
-    await db.runAsync(`DELETE FROM food_catalog WHERE id = ?`, [id]);
-    await db.execAsync('COMMIT');
-  } catch (e) {
-    await db.execAsync('ROLLBACK');
-    throw e;
-  }
+    await txn.runAsync(`UPDATE food_entries SET catalog_id = NULL WHERE catalog_id = ?`, [id]);
+    await txn.runAsync(`DELETE FROM food_catalog WHERE id = ?`, [id]);
+  });
 }
 
 export async function getCatalogItem(id: number): Promise<FoodCatalogItem | null> {

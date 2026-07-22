@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View, Platform } from 'react-native';
+import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import NetInfo from '@react-native-community/netinfo';
 import { getBarcodeCache, normalizeBarcode } from '@/src/db/repositories/barcode';
 import { fetchOpenFoodFacts } from '@/src/services/off';
@@ -9,20 +9,21 @@ import { setPendingDraft } from '@/src/services/draftStore';
 import { PrimaryButton } from '@/src/components/ui';
 import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
-import { useApp } from '@/src/context/AppContext';
+import type { MealType } from '@/src/domain/types';
 
 export default function ScanScreen() {
   const router = useRouter();
-  const { selectedDate } = useApp();
+  const params = useLocalSearchParams<{ meal?: string }>();
+  const meal: MealType = ['breakfast', 'lunch', 'dinner', 'snack'].includes(params.meal ?? '')
+    ? (params.meal as MealType)
+    : 'snack';
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const locked = useRef(false);
-  void selectedDate;
+  const requestController = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    if (!permission?.granted) requestPermission();
-  }, [permission, requestPermission]);
+  useEffect(() => () => requestController.current?.abort(), []);
 
   const handleBarcode = async (result: BarcodeScanningResult) => {
     if (locked.current || busy) return;
@@ -34,7 +35,7 @@ export default function ScanScreen() {
       if (cached) {
         setPendingDraft({
           name: cached.name,
-          mealType: 'snack',
+          mealType: meal,
           basis: cached.basis,
           sourceKcal: cached.sourceKcal,
           sourceProteinG: cached.sourceProteinG,
@@ -50,17 +51,22 @@ export default function ScanScreen() {
       }
 
       const net = await NetInfo.fetch();
-      if (!net.isConnected) {
+      if (net.isConnected === false) {
         setMessage(zhTW.barcode.offlineNoCache);
         setBusy(false);
         locked.current = false;
         return;
       }
 
-      const off = await fetchOpenFoodFacts(code, 'snack');
+      const controller = new AbortController();
+      requestController.current = controller;
+      const off = await fetchOpenFoodFacts(code, meal, controller.signal);
+      requestController.current = null;
       if (!off.ok) {
         setMessage(
-          off.reason === 'timeout'
+          off.reason === 'cancelled'
+            ? '已取消查詢'
+            : off.reason === 'timeout'
             ? zhTW.barcode.timeout
             : off.reason === 'not_found'
               ? zhTW.barcode.notFound
@@ -79,11 +85,34 @@ export default function ScanScreen() {
     }
   };
 
-  if (!permission?.granted) {
+  if (!permission) {
     return (
       <View style={styles.center}>
-        <Text style={styles.text}>{zhTW.barcode.permission}</Text>
-        <PrimaryButton label={zhTW.barcode.grant} onPress={requestPermission} />
+        <Text style={styles.permissionText}>{zhTW.common.loading}</Text>
+      </View>
+    );
+  }
+
+  if (!permission.granted) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.permissionText}>
+          {permission.canAskAgain
+            ? zhTW.barcode.permission
+            : '相機權限已被拒絕。請前往系統設定開啟相機權限，或改用手動新增。'}
+        </Text>
+        {permission.canAskAgain ? (
+          <PrimaryButton label={zhTW.barcode.grant} onPress={requestPermission} />
+        ) : (
+          <PrimaryButton
+            label="開啟系統設定"
+            onPress={() => void Linking.openSettings()}
+          />
+        )}
+        <PrimaryButton
+          label={zhTW.barcode.useManual}
+          onPress={() => router.replace('/food/add')}
+        />
       </View>
     );
   }
@@ -91,7 +120,7 @@ export default function ScanScreen() {
   if (Platform.OS === 'web') {
     return (
       <View style={styles.center}>
-        <Text style={styles.text}>Web 預覽條碼掃描功能有限，請改用手動新增或輸入測試流程。</Text>
+        <Text style={styles.permissionText}>Web 預覽條碼掃描功能有限，請改用手動新增或輸入測試流程。</Text>
         <PrimaryButton label={zhTW.barcode.useManual} onPress={() => router.replace('/food/add')} />
       </View>
     );
@@ -106,7 +135,15 @@ export default function ScanScreen() {
         onBarcodeScanned={busy ? undefined : handleBarcode}
       />
       <View style={styles.overlay}>
-        {busy ? <Text style={styles.text}>{zhTW.common.loading}</Text> : null}
+        {busy ? (
+          <View style={styles.msgBox}>
+            <Text style={styles.text}>{zhTW.common.loading}</Text>
+            <PrimaryButton
+              label={zhTW.common.cancel}
+              onPress={() => requestController.current?.abort()}
+            />
+          </View>
+        ) : null}
         {message ? (
           <View style={styles.msgBox}>
             <Text style={styles.text}>{message}</Text>
@@ -147,5 +184,6 @@ const styles = StyleSheet.create({
   },
   msgBox: { backgroundColor: 'rgba(0,0,0,0.7)', padding: theme.space.md, borderRadius: theme.radius, gap: theme.space.sm },
   text: { color: '#fff', textAlign: 'center' },
+  permissionText: { color: theme.colors.text, textAlign: 'center', lineHeight: 22 },
   hint: { color: '#fff', textAlign: 'center', fontWeight: '600' },
 });

@@ -23,11 +23,7 @@ export function MealPicker({
             accessibilityRole="radio"
             accessibilityState={{ selected }}
             accessibilityLabel={zhTW.meal[m]}
-            style={[
-              styles.chip,
-              { borderColor: theme.colors.mealAccent[m] },
-              selected && { backgroundColor: theme.colors.mealAccent[m] },
-            ]}
+            style={[styles.chip, selected && styles.chipSelected]}
           >
             <Text style={[styles.chipText, selected && styles.chipTextOn]}>
               {zhTW.meal[m]}
@@ -81,17 +77,18 @@ const styles = StyleSheet.create({
   chip: {
     minHeight: theme.minTouch,
     paddingHorizontal: theme.space.md,
-    borderWidth: 2,
-    borderColor: theme.colors.accent,
+    borderWidth: 1.5,
+    borderColor: theme.colors.lakeBlue,
     borderRadius: theme.radius,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: theme.colors.bg,
   },
   chipSelected: {
-    backgroundColor: theme.colors.accent,
+    backgroundColor: theme.colors.lakeBlue,
   },
   chipText: {
-    color: theme.colors.text,
+    color: theme.colors.lakeBlue,
     fontWeight: '600',
   },
   chipTextOn: {

@@ -28,7 +28,7 @@ function Gate({ children }: { children: React.ReactNode }) {
   if (!ready) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color={theme.colors.accent} />
+        <ActivityIndicator size="large" color={theme.colors.lakeBlue} />
       </View>
     );
   }
@@ -40,29 +40,47 @@ function Gate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function AppStack() {
+  const { t } = useApp();
+  return (
+    <Stack
+      screenOptions={{
+        headerStyle: { backgroundColor: theme.colors.bg },
+        headerTintColor: theme.colors.text,
+        contentStyle: { backgroundColor: theme.colors.bg },
+      }}
+    >
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="food/log" options={{ title: t('foodHub.title') }} />
+      <Stack.Screen name="food/add" options={{ title: t('foodHub.createFood') }} />
+      <Stack.Screen name="food/edit/[id]" options={{ title: t('common.edit') }} />
+      <Stack.Screen name="food/scan" options={{ title: t('barcode.title') }} />
+      <Stack.Screen name="food/ai" options={{ title: t('ai.title') }} />
+      <Stack.Screen name="water/index" options={{ title: t('habits.water') }} />
+      <Stack.Screen name="exercise/index" options={{ title: t('habits.exercise') }} />
+      <Stack.Screen name="steps/index" options={{ title: t('habits.steps') }} />
+      <Stack.Screen name="weight/index" options={{ title: t('weight.title') }} />
+      <Stack.Screen name="goals" options={{ title: t('goals.title') }} />
+      <Stack.Screen name="settings/ai" options={{ title: t('ai.settings') }} />
+      <Stack.Screen name="settings/data" options={{ title: t('settings.data') }} />
+      <Stack.Screen name="library/meal/new" options={{ title: t('library.createMeal') }} />
+      <Stack.Screen name="library/meal/[id]" options={{ title: t('library.meals') }} />
+      <Stack.Screen name="library/recipe/new" options={{ title: t('library.createRecipe') }} />
+      <Stack.Screen name="library/recipe/[id]" options={{ title: t('library.recipes') }} />
+      <Stack.Screen name="diary/copy" options={{ title: t('copy.title') }} />
+      <Stack.Screen name="progress/calories" options={{ title: t('progressDetail.calories') }} />
+      <Stack.Screen name="progress/macros" options={{ title: t('progressDetail.macros') }} />
+    </Stack>
+  );
+}
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AppProvider>
         <WebPreviewBanner />
         <Gate>
-          <Stack
-            screenOptions={{
-              headerStyle: { backgroundColor: theme.colors.bg },
-              headerTintColor: theme.colors.text,
-              contentStyle: { backgroundColor: theme.colors.bg },
-            }}
-          >
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="food/add" options={{ title: '新增食物' }} />
-            <Stack.Screen name="food/edit/[id]" options={{ title: '編輯食物' }} />
-            <Stack.Screen name="food/scan" options={{ title: '掃描條碼' }} />
-            <Stack.Screen name="food/ai" options={{ title: 'AI 分析' }} />
-            <Stack.Screen name="weight/index" options={{ title: '體重紀錄' }} />
-            <Stack.Screen name="goals" options={{ title: '每日目標' }} />
-            <Stack.Screen name="settings/ai" options={{ title: 'AI 設定' }} />
-            <Stack.Screen name="settings/data" options={{ title: '資料管理' }} />
-          </Stack>
+          <AppStack />
         </Gate>
       </AppProvider>
     </SafeAreaProvider>
