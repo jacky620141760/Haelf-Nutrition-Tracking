@@ -1,4 +1,7 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+/** Ongoing daily goals use this effective date so they apply to every day until changed. */
+export const ONGOING_GOAL_EFFECTIVE_DATE = '2000-01-01';
 
 export type Migration = {
   version: number;
@@ -221,12 +224,73 @@ CREATE TABLE IF NOT EXISTS app_preferences (
 );
 INSERT OR IGNORE INTO app_preferences
   (id, locale, water_unit, week_start, step_mode, exercise_calories_enabled, updated_at)
-VALUES (1, 'zh-TW', 'ml', 1, 'pedometer', 1, datetime('now'));
+VALUES (1, 'en', 'ml', 1, 'pedometer', 1, datetime('now'));
+`;
+
+export const MIGRATION_V3 = `
+ALTER TABLE food_catalog ADD COLUMN cloud_id TEXT;
+ALTER TABLE food_catalog ADD COLUMN deleted_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_food_catalog_cloud ON food_catalog(cloud_id) WHERE cloud_id IS NOT NULL;
+
+ALTER TABLE food_entries ADD COLUMN cloud_id TEXT;
+ALTER TABLE food_entries ADD COLUMN deleted_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_food_entries_cloud ON food_entries(cloud_id) WHERE cloud_id IS NOT NULL;
+
+ALTER TABLE daily_goal_versions ADD COLUMN cloud_id TEXT;
+ALTER TABLE daily_goal_versions ADD COLUMN deleted_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goals_cloud ON daily_goal_versions(cloud_id) WHERE cloud_id IS NOT NULL;
+
+ALTER TABLE weight_entries ADD COLUMN cloud_id TEXT;
+ALTER TABLE weight_entries ADD COLUMN deleted_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_weight_cloud ON weight_entries(cloud_id) WHERE cloud_id IS NOT NULL;
+
+ALTER TABLE water_entries ADD COLUMN cloud_id TEXT;
+ALTER TABLE water_entries ADD COLUMN deleted_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_water_cloud ON water_entries(cloud_id) WHERE cloud_id IS NOT NULL;
+
+ALTER TABLE water_goal_versions ADD COLUMN cloud_id TEXT;
+ALTER TABLE water_goal_versions ADD COLUMN deleted_at TEXT;
+
+ALTER TABLE exercise_entries ADD COLUMN cloud_id TEXT;
+ALTER TABLE exercise_entries ADD COLUMN deleted_at TEXT;
+
+ALTER TABLE daily_step_totals ADD COLUMN cloud_id TEXT;
+ALTER TABLE daily_step_totals ADD COLUMN deleted_at TEXT;
+
+ALTER TABLE daily_diary_status ADD COLUMN cloud_id TEXT;
+ALTER TABLE daily_diary_status ADD COLUMN deleted_at TEXT;
+
+ALTER TABLE app_preferences ADD COLUMN cloud_id TEXT;
+ALTER TABLE app_preferences ADD COLUMN deleted_at TEXT;
+
+ALTER TABLE saved_meals ADD COLUMN cloud_id TEXT;
+ALTER TABLE saved_meals ADD COLUMN deleted_at TEXT;
+
+ALTER TABLE recipes ADD COLUMN cloud_id TEXT;
+ALTER TABLE recipes ADD COLUMN deleted_at TEXT;
+
+CREATE TABLE IF NOT EXISTS sync_state (
+  key TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sync_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  table_name TEXT NOT NULL,
+  cloud_id TEXT NOT NULL,
+  local_id INTEGER,
+  op TEXT NOT NULL CHECK(op IN ('upsert','delete')),
+  payload_json TEXT,
+  updated_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sync_outbox_created ON sync_outbox(created_at);
 `;
 
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: MIGRATION_V1 },
   { version: 2, sql: MIGRATION_V2 },
+  { version: 3, sql: MIGRATION_V3 },
 ];
 
 export function pendingMigrations(

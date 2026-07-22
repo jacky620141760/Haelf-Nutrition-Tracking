@@ -1,9 +1,9 @@
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { zhTW } from '@/src/i18n/zh-TW';
 import { theme } from '@/src/theme';
-import { SectionTitle, MfpCard } from '@/src/components/ui';
+import { SectionTitle, MfpCard, PrimaryButton } from '@/src/components/ui';
 import { useApp } from '@/src/context/AppContext';
+import { useAuth } from '@/src/context/AuthContext';
 
 function Row({ label, onPress, hint }: { label: string; onPress: () => void; hint?: string }) {
   return (
@@ -23,15 +23,38 @@ function Row({ label, onPress, hint }: { label: string; onPress: () => void; hin
 export default function MoreScreen() {
   const router = useRouter();
   const { isWeb, preferences, updatePreferences, t } = useApp();
+  const { user, signOutUser, syncNow, syncing, lastSyncError } = useAuth();
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <SectionTitle title={t('settings.title')} />
       {isWeb ? (
         <View style={styles.warn} accessibilityRole="alert">
-          <Text style={styles.warnText}>{zhTW.webPreviewBanner}</Text>
+          <Text style={styles.warnText}>{t('webPreviewBanner')}</Text>
         </View>
       ) : null}
+
+      <MfpCard>
+        <Text style={styles.accountLabel}>{t('auth.account')}</Text>
+        <Text style={styles.accountEmail}>{user?.email ?? t('common.unknown')}</Text>
+        <PrimaryButton
+          label={syncing ? t('auth.syncing') : t('auth.syncNow')}
+          onPress={() => void syncNow()}
+        />
+        {lastSyncError ? <Text style={styles.syncError}>{lastSyncError}</Text> : null}
+        <View style={{ height: theme.space.sm }} />
+        <PrimaryButton
+          label={t('auth.signOut')}
+          danger
+          onPress={() =>
+            Alert.alert(t('auth.signOut'), t('auth.signOutKeepLocal'), [
+              { text: t('common.cancel'), style: 'cancel' },
+              { text: t('auth.signOut'), style: 'destructive', onPress: () => void signOutUser() },
+            ])
+          }
+        />
+      </MfpCard>
+
       <MfpCard>
         <Row label={t('settings.goals')} onPress={() => router.push('/goals')} />
         <Row label={t('library.myFoods')} onPress={() => router.push('/library' as never)} />
@@ -40,9 +63,12 @@ export default function MoreScreen() {
         <Row label={t('ai.settings')} onPress={() => router.push('/settings/ai')} />
         <Row
           label={`${t('settings.units')} · ${preferences.waterUnit}`}
-          onPress={() => void updatePreferences({
-            waterUnit: preferences.waterUnit === 'ml' ? 'cup' : preferences.waterUnit === 'cup' ? 'oz' : 'ml',
-          })}
+          onPress={() =>
+            void updatePreferences({
+              waterUnit:
+                preferences.waterUnit === 'ml' ? 'cup' : preferences.waterUnit === 'cup' ? 'oz' : 'ml',
+            })
+          }
         />
         <Row
           label={`${t('settings.weekStart')} · ${preferences.weekStart === 1 ? 'Monday' : 'Sunday'}`}
@@ -50,13 +76,15 @@ export default function MoreScreen() {
         />
         <Row
           label={`${t('settings.language')} · ${preferences.locale}`}
-          onPress={() => void updatePreferences({ locale: preferences.locale === 'zh-TW' ? 'en' : 'zh-TW' })}
+          onPress={() =>
+            void updatePreferences({ locale: preferences.locale === 'zh-TW' ? 'en' : 'zh-TW' })
+          }
         />
         <Row label={t('settings.pedometer')} onPress={() => router.push('/steps' as never)} />
         <Row label={t('settings.data')} onPress={() => router.push('/settings/data')} />
         <Row
           label={t('settings.privacy')}
-          onPress={() => Alert.alert('Haelf Nutrition', 'Local-first nutrition tracking. No account or cloud sync.')}
+          onPress={() => Alert.alert('Haelf Nutrition', t('settings.privacyBody'))}
         />
       </MfpCard>
       <Text style={styles.notice}>{t('settings.backupNotice')}</Text>
@@ -91,4 +119,7 @@ const styles = StyleSheet.create({
     marginBottom: theme.space.md,
   },
   warnText: { color: theme.colors.warning, fontWeight: '600' },
+  accountLabel: { color: theme.colors.textMuted, fontSize: theme.font.small, marginBottom: 4 },
+  accountEmail: { fontWeight: '700', color: theme.colors.text, marginBottom: theme.space.md },
+  syncError: { color: theme.colors.danger, marginTop: theme.space.sm, fontSize: theme.font.small },
 });

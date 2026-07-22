@@ -176,15 +176,19 @@ assert(JSON.stringify(segments) === JSON.stringify([[1, 2], [3], [4, 5]]), 'weig
 
 // Migration registry
 assert(
-  JSON.stringify(pendingMigrations(0).map((migration) => migration.version)) === '[1,2]',
+  JSON.stringify(pendingMigrations(0).map((migration) => migration.version)) === '[1,2,3]',
   'migration v0 to current'
 );
 assert(
-  JSON.stringify(pendingMigrations(1).map((migration) => migration.version)) === '[2]',
-  'migration v1 to v2'
+  JSON.stringify(pendingMigrations(1).map((migration) => migration.version)) === '[2,3]',
+  'migration v1 to current'
 );
-assert(pendingMigrations(2).length === 0, 'current schema has no migration');
-assertThrows(() => pendingMigrations(3, 2), 'newer database must be rejected');
+assert(
+  JSON.stringify(pendingMigrations(2).map((migration) => migration.version)) === '[3]',
+  'migration v2 to v3'
+);
+assert(pendingMigrations(3).length === 0, 'current schema has no migration');
+assertThrows(() => pendingMigrations(4, 3), 'newer database must be rejected');
 
 // v2 daily summary, water, recipes, streak, and steps
 const summary = buildDailySummary({

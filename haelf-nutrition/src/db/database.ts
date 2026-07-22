@@ -159,6 +159,8 @@ export async function initDatabase(): Promise<DbInitResult> {
 export async function clearAllAppTables(): Promise<void> {
   await runInTransaction(async (txn) => {
     await txn.execAsync(`
+      DELETE FROM sync_outbox;
+      DELETE FROM sync_state;
       DELETE FROM saved_meal_items;
       DELETE FROM recipe_ingredients;
       DELETE FROM food_entries;

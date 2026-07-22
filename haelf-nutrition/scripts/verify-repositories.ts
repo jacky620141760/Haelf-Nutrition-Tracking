@@ -1,5 +1,5 @@
 import initSqlJs from 'sql.js';
-import { MIGRATION_V1, MIGRATION_V2 } from '../src/db/schema';
+import { MIGRATION_V1, MIGRATION_V2, MIGRATION_V3 } from '../src/db/schema';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(message);
@@ -62,6 +62,27 @@ assert(
 assert(
   db.exec(`PRAGMA table_info(food_entries)`)[0].values.some((row) => row[1] === 'log_group_id'),
   'food log_group_id exists'
+);
+
+db.run('BEGIN');
+try {
+  db.exec(MIGRATION_V3);
+  db.run(
+    `INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '3')`
+  );
+  db.run('COMMIT');
+} catch (error) {
+  db.run('ROLLBACK');
+  throw error;
+}
+
+assert(
+  db.exec(`SELECT value FROM meta WHERE key='schema_version'`)[0].values[0][0] === '3',
+  'migration reaches v3'
+);
+assert(
+  db.exec(`PRAGMA table_info(food_entries)`)[0].values.some((row) => row[1] === 'cloud_id'),
+  'food cloud_id exists'
 );
 
 db.run('BEGIN');

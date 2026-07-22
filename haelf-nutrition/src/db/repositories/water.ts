@@ -1,4 +1,5 @@
 import type { WaterEntry, WaterGoalVersion } from '../../domain/types';
+import { ONGOING_GOAL_EFFECTIVE_DATE } from '../schema';
 import { assertWritable, getDb } from '../database';
 
 type WaterRow = {
@@ -86,7 +87,7 @@ export async function deleteWaterEntry(id: number): Promise<void> {
 
 export async function listWaterGoalVersions(): Promise<WaterGoalVersion[]> {
   const rows = await getDb().getAllAsync<GoalRow>(
-    `SELECT * FROM water_goal_versions ORDER BY effective_date DESC`
+    `SELECT * FROM water_goal_versions WHERE deleted_at IS NULL ORDER BY effective_date DESC`
   );
   return rows.map(mapGoal);
 }
@@ -98,9 +99,13 @@ export async function upsertWaterGoalForDate(
   assertWritable();
   const now = new Date().toISOString();
   await getDb().runAsync(
-    `INSERT INTO water_goal_versions (effective_date, ml, created_at, updated_at)
-     VALUES (?,?,?,?)
-     ON CONFLICT(effective_date) DO UPDATE SET ml=excluded.ml, updated_at=excluded.updated_at`,
+    `INSERT INTO water_goal_versions (effective_date, ml, created_at, updated_at, cloud_id, deleted_at)
+     VALUES (?,?,?,?,NULL,NULL)
+     ON CONFLICT(effective_date) DO UPDATE SET ml=excluded.ml, updated_at=excluded.updated_at, deleted_at=NULL`,
     [effectiveDate, ml, now, now]
   );
+}
+
+export async function upsertOngoingWaterGoal(ml: number): Promise<void> {
+  return upsertWaterGoalForDate(ONGOING_GOAL_EFFECTIVE_DATE, ml);
 }

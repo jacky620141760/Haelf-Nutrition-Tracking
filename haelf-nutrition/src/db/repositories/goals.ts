@@ -1,5 +1,7 @@
 import type { DailyGoalVersion } from '../../domain/types';
+import { ONGOING_GOAL_EFFECTIVE_DATE } from '../schema';
 import { assertWritable, getDb } from '../database';
+import { newCloudId } from './sync';
 
 type Row = {
   id: number;
@@ -10,6 +12,8 @@ type Row = {
   carbs_g: number;
   created_at: string;
   updated_at: string;
+  cloud_id: string | null;
+  deleted_at: string | null;
 };
 
 function map(row: Row): DailyGoalVersion {
@@ -27,9 +31,31 @@ function map(row: Row): DailyGoalVersion {
 
 export async function listGoalVersions(): Promise<DailyGoalVersion[]> {
   const rows = await getDb().getAllAsync<Row>(
-    `SELECT * FROM daily_goal_versions ORDER BY effective_date DESC`
+    `SELECT * FROM daily_goal_versions WHERE deleted_at IS NULL ORDER BY effective_date DESC`
   );
   return rows.map(map);
+}
+
+export async function hasOngoingGoals(): Promise<boolean> {
+  const row = await getDb().getFirstAsync<{ id: number }>(
+    `SELECT id FROM daily_goal_versions
+     WHERE deleted_at IS NULL AND effective_date <= date('now','localtime')
+     LIMIT 1`
+  );
+  return !!row;
+}
+
+/** Upsert the ongoing daily goal (applies every day until changed). */
+export async function upsertOngoingGoals(input: {
+  kcal: number;
+  proteinG: number;
+  fatG: number;
+  carbsG: number;
+}): Promise<void> {
+  return upsertGoalForDate({
+    effectiveDate: ONGOING_GOAL_EFFECTIVE_DATE,
+    ...input,
+  });
 }
 
 export async function upsertGoalForDate(input: {
@@ -48,14 +74,23 @@ export async function upsertGoalForDate(input: {
   );
   if (existing) {
     await db.runAsync(
-      `UPDATE daily_goal_versions SET kcal=?, protein_g=?, fat_g=?, carbs_g=?, updated_at=? WHERE effective_date=?`,
+      `UPDATE daily_goal_versions SET kcal=?, protein_g=?, fat_g=?, carbs_g=?, updated_at=?, deleted_at=NULL WHERE effective_date=?`,
       [input.kcal, input.proteinG, input.fatG, input.carbsG, now, input.effectiveDate]
     );
   } else {
     await db.runAsync(
-      `INSERT INTO daily_goal_versions (effective_date, kcal, protein_g, fat_g, carbs_g, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?)`,
-      [input.effectiveDate, input.kcal, input.proteinG, input.fatG, input.carbsG, now, now]
+      `INSERT INTO daily_goal_versions (effective_date, kcal, protein_g, fat_g, carbs_g, created_at, updated_at, cloud_id, deleted_at)
+       VALUES (?,?,?,?,?,?,?,?,NULL)`,
+      [
+        input.effectiveDate,
+        input.kcal,
+        input.proteinG,
+        input.fatG,
+        input.carbsG,
+        now,
+        now,
+        newCloudId(),
+      ]
     );
   }
 }

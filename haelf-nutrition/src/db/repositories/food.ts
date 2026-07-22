@@ -60,7 +60,7 @@ function mapFood(row: FoodRow): FoodEntry {
 export async function listFoodEntriesByDate(localDate: string): Promise<FoodEntry[]> {
   const db = getDb();
   const rows = await db.getAllAsync<FoodRow>(
-    `SELECT * FROM food_entries WHERE local_date = ? ORDER BY utc_timestamp ASC, id ASC`,
+    `SELECT * FROM food_entries WHERE local_date = ? AND deleted_at IS NULL ORDER BY utc_timestamp ASC, id ASC`,
     [localDate]
   );
   return rows.map(mapFood);
@@ -72,7 +72,7 @@ export async function listFoodEntriesInDateRange(
 ): Promise<FoodEntry[]> {
   const db = getDb();
   const rows = await db.getAllAsync<FoodRow>(
-    `SELECT * FROM food_entries WHERE local_date >= ? AND local_date <= ? ORDER BY local_date, utc_timestamp`,
+    `SELECT * FROM food_entries WHERE local_date >= ? AND local_date <= ? AND deleted_at IS NULL ORDER BY local_date, utc_timestamp`,
     [startDate, endDate]
   );
   return rows.map(mapFood);
@@ -197,14 +197,22 @@ export async function updateFoodEntry(
 
 export async function deleteFoodEntry(id: number): Promise<void> {
   assertWritable();
-  await getDb().runAsync(`DELETE FROM food_entries WHERE id = ?`, [id]);
+  const now = new Date().toISOString();
+  await getDb().runAsync(
+    `UPDATE food_entries SET deleted_at = ?, updated_at = ? WHERE id = ?`,
+    [now, now, id]
+  );
 }
 
 export async function deleteFoodEntries(ids: number[]): Promise<void> {
   if (!ids.length) return;
+  const now = new Date().toISOString();
   await runInTransaction(async (txn) => {
     for (const id of ids) {
-      await txn.runAsync(`DELETE FROM food_entries WHERE id=?`, [id]);
+      await txn.runAsync(
+        `UPDATE food_entries SET deleted_at = ?, updated_at = ? WHERE id=?`,
+        [now, now, id]
+      );
     }
   });
 }

@@ -6,6 +6,8 @@ export {
   MIGRATIONS,
   MIGRATION_V1,
   MIGRATION_V2,
+  MIGRATION_V3,
+  ONGOING_GOAL_EFFECTIVE_DATE,
   pendingMigrations,
   SCHEMA_VERSION,
   type Migration,

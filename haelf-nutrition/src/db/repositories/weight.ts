@@ -27,7 +27,7 @@ function map(row: Row): WeightEntry {
 
 export async function listWeightsByDate(localDate: string): Promise<WeightEntry[]> {
   const rows = await getDb().getAllAsync<Row>(
-    `SELECT * FROM weight_entries WHERE local_date = ? ORDER BY utc_timestamp DESC, id DESC`,
+    `SELECT * FROM weight_entries WHERE local_date = ? AND (deleted_at IS NULL OR deleted_at = '') ORDER BY utc_timestamp DESC, id DESC`,
     [localDate]
   );
   return rows.map(map);
@@ -35,7 +35,7 @@ export async function listWeightsByDate(localDate: string): Promise<WeightEntry[
 
 export async function listWeightsInRange(startDate: string, endDate: string): Promise<WeightEntry[]> {
   const rows = await getDb().getAllAsync<Row>(
-    `SELECT * FROM weight_entries WHERE local_date >= ? AND local_date <= ? ORDER BY local_date, utc_timestamp, id`,
+    `SELECT * FROM weight_entries WHERE local_date >= ? AND local_date <= ? AND (deleted_at IS NULL OR deleted_at = '') ORDER BY local_date, utc_timestamp, id`,
     [startDate, endDate]
   );
   return rows.map(map);
@@ -113,7 +113,11 @@ export async function updateWeightEntry(
 
 export async function deleteWeightEntry(id: number): Promise<void> {
   assertWritable();
-  await getDb().runAsync(`DELETE FROM weight_entries WHERE id = ?`, [id]);
+  const now = new Date().toISOString();
+  await getDb().runAsync(
+    `UPDATE weight_entries SET deleted_at = ?, updated_at = ? WHERE id = ?`,
+    [now, now, id]
+  );
 }
 
 export async function getWeightEntry(id: number): Promise<WeightEntry | null> {
@@ -125,7 +129,7 @@ export async function getLatestWeightOnOrBefore(
   localDate: string
 ): Promise<WeightEntry | null> {
   const row = await getDb().getFirstAsync<Row>(
-    `SELECT * FROM weight_entries WHERE local_date<=?
+    `SELECT * FROM weight_entries WHERE local_date<=? AND (deleted_at IS NULL OR deleted_at = '')
      ORDER BY local_date DESC, utc_timestamp DESC, id DESC LIMIT 1`,
     [localDate]
   );
