@@ -23,7 +23,7 @@ function Row({ label, onPress, hint }: { label: string; onPress: () => void; hin
 export default function MoreScreen() {
   const router = useRouter();
   const { isWeb, preferences, updatePreferences, t } = useApp();
-  const { user, signOutUser, syncNow, syncing, lastSyncError } = useAuth();
+  const { user, signOutUser, lastSyncError } = useAuth();
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -37,12 +37,7 @@ export default function MoreScreen() {
       <MfpCard>
         <Text style={styles.accountLabel}>{t('auth.account')}</Text>
         <Text style={styles.accountEmail}>{user?.email ?? t('common.unknown')}</Text>
-        <PrimaryButton
-          label={syncing ? t('auth.syncing') : t('auth.syncNow')}
-          onPress={() => void syncNow()}
-        />
         {lastSyncError ? <Text style={styles.syncError}>{lastSyncError}</Text> : null}
-        <View style={{ height: theme.space.sm }} />
         <PrimaryButton
           label={t('auth.signOut')}
           danger
@@ -71,11 +66,7 @@ export default function MoreScreen() {
           }
         />
         <Row
-          label={`${t('settings.weekStart')} · ${preferences.weekStart === 1 ? 'Monday' : 'Sunday'}`}
-          onPress={() => void updatePreferences({ weekStart: preferences.weekStart === 1 ? 0 : 1 })}
-        />
-        <Row
-          label={`${t('settings.language')} · ${preferences.locale}`}
+          label={`${t('settings.language')} · ${preferences.locale === 'en' ? 'en' : 'zh-HK'}`}
           onPress={() =>
             void updatePreferences({ locale: preferences.locale === 'zh-TW' ? 'en' : 'zh-TW' })
           }
@@ -120,6 +111,6 @@ const styles = StyleSheet.create({
   },
   warnText: { color: theme.colors.warning, fontWeight: '600' },
   accountLabel: { color: theme.colors.textMuted, fontSize: theme.font.small, marginBottom: 4 },
-  accountEmail: { fontWeight: '700', color: theme.colors.text, marginBottom: theme.space.md },
-  syncError: { color: theme.colors.danger, marginTop: theme.space.sm, fontSize: theme.font.small },
+  accountEmail: { fontWeight: '700', color: theme.colors.text, marginBottom: theme.space.sm },
+  syncError: { color: theme.colors.danger, marginBottom: theme.space.sm, fontSize: theme.font.small },
 });

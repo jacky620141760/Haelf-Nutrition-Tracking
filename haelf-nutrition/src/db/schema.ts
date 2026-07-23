@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** Ongoing daily goals use this effective date so they apply to every day until changed. */
 export const ONGOING_GOAL_EFFECTIVE_DATE = '2000-01-01';
@@ -287,10 +287,24 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
 CREATE INDEX IF NOT EXISTS idx_sync_outbox_created ON sync_outbox(created_at);
 `;
 
+/** Body metrics + weight-loss plan (singleton on app_preferences). */
+export const MIGRATION_V4 = `
+ALTER TABLE app_preferences ADD COLUMN sex TEXT;
+ALTER TABLE app_preferences ADD COLUMN age_years REAL;
+ALTER TABLE app_preferences ADD COLUMN height_cm REAL;
+ALTER TABLE app_preferences ADD COLUMN activity_level TEXT;
+ALTER TABLE app_preferences ADD COLUMN current_weight_kg REAL;
+ALTER TABLE app_preferences ADD COLUMN target_weight_kg REAL;
+ALTER TABLE app_preferences ADD COLUMN plan_weeks REAL;
+ALTER TABLE app_preferences ADD COLUMN tdee_mode TEXT NOT NULL DEFAULT 'auto';
+ALTER TABLE app_preferences ADD COLUMN tdee_kcal REAL;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: MIGRATION_V1 },
   { version: 2, sql: MIGRATION_V2 },
   { version: 3, sql: MIGRATION_V3 },
+  { version: 4, sql: MIGRATION_V4 },
 ];
 
 export function pendingMigrations(

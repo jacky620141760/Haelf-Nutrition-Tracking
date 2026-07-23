@@ -4,6 +4,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
@@ -13,12 +14,13 @@ import {
   getSession,
   isSupabaseConfigured,
   resetPassword,
+  signInAsGuest,
   signInWithEmail,
   signOut,
   signUpWithEmail,
   supabase,
 } from '../services/auth/client';
-import { clearBoundUser, getBoundUserId, runFullSync } from '../services/sync/engine';
+import { awaitSyncIdle, prepareAccountForSync, runFullSync } from '../services/sync/engine';
 import { setSyncRunner } from '../services/sync/scheduler';
 import { hasOngoingGoals } from '../db/repositories/goals';
 import { clearAllAppTables } from '../db/database';
@@ -47,6 +49,7 @@ type AuthContextValue = {
   finishStepsOnboarding: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<{ ok: true } | { ok: false; message: string }>;
   signUp: (email: string, password: string) => Promise<{ ok: true } | { ok: false; message: string }>;
+  signInGuest: () => Promise<{ ok: true } | { ok: false; message: string }>;
   signOutUser: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<{ ok: true } | { ok: false; message: string }>;
   syncNow: () => Promise<void>;
@@ -63,6 +66,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [needsStepsSetup, setNeedsStepsSetup] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
+  const bindInFlight = useRef<Promise<void> | null>(null);
+  const bindUserId = useRef<string | null>(null);
+  const autoSyncReady = useRef(false);
 
   const refreshOnboardingGate = useCallback(async () => {
     try {
@@ -85,6 +91,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const syncNow = useCallback(async () => {
     const userId = session?.user?.id;
     if (!userId || !isSupabaseConfigured()) return;
+    // Avoid overlapping bindAccount wipe + background sync.
+    if (bindInFlight.current) {
+      await bindInFlight.current;
+      return;
+    }
     setSyncing(true);
     setLastSyncError(null);
     const result = await runFullSync(userId);
@@ -96,21 +107,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const bindAccount = useCallback(
     async (userId: string) => {
-      const bound = await getBoundUserId();
-      if (bound && bound !== userId && bound !== '') {
-        await clearAllAppTables();
-        await clearBoundUser();
-        await clearOnboardingFlags();
+      if (bindInFlight.current && bindUserId.current === userId) {
+        return bindInFlight.current;
       }
-      setSyncing(true);
-      const result = await runFullSync(userId);
-      if (!result.ok) setLastSyncError(result.message);
-      else {
-        setLastSyncError(null);
-        await reloadFromDb();
-      }
-      await refreshOnboardingGate();
-      setSyncing(false);
+      bindUserId.current = userId;
+      const work = (async () => {
+        try {
+          // Finish any in-flight sync before wipe so we do not clear mid-push.
+          await awaitSyncIdle();
+          const { cleared } = await prepareAccountForSync(userId);
+          if (cleared) {
+            await clearOnboardingFlags();
+            await reloadFromDb();
+          }
+          setSyncing(true);
+          const result = await runFullSync(userId);
+          if (!result.ok) setLastSyncError(result.message);
+          else {
+            setLastSyncError(null);
+            await reloadFromDb();
+          }
+          await refreshOnboardingGate();
+        } finally {
+          setSyncing(false);
+          if (bindUserId.current === userId) {
+            bindInFlight.current = null;
+          }
+        }
+      })();
+      bindInFlight.current = work;
+      return work;
     },
     [refreshOnboardingGate, reloadFromDb]
   );
@@ -118,6 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!session?.user) {
       setSyncRunner(null);
+      autoSyncReady.current = false;
       return;
     }
     setSyncRunner(syncNow);
@@ -137,7 +164,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setNeedsAiSetup(false);
         setNeedsStepsSetup(false);
       }
-      setLoading(false);
+      if (mounted) setLoading(false);
     })();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
@@ -145,6 +172,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (next?.user) {
         void bindAccount(next.user.id);
       } else {
+        bindUserId.current = null;
         setNeedsGoalsSetup(false);
         setNeedsAiSetup(false);
         setNeedsStepsSetup(false);
@@ -158,14 +186,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [bindAccount]);
 
   useEffect(() => {
-    if (!session?.user) return;
+    if (!session?.user) {
+      autoSyncReady.current = false;
+      return;
+    }
+    // Skip the first NetInfo/AppState burst right after login/signup bind.
+    autoSyncReady.current = false;
+    const arm = setTimeout(() => {
+      autoSyncReady.current = true;
+    }, 2500);
+
     const net = NetInfo.addEventListener((state) => {
+      if (!autoSyncReady.current) return;
       if (state.isConnected) void syncNow();
     });
     const app = AppState.addEventListener('change', (state) => {
+      if (!autoSyncReady.current) return;
       if (state === 'active') void syncNow();
     });
     return () => {
+      clearTimeout(arm);
       net();
       app.remove();
     };
@@ -180,12 +220,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signUp = useCallback(async (email: string, password: string) => {
     const result = await signUpWithEmail(email, password);
     if (!result.ok) return result;
+    // Wait for account bind (and any wipe) before writing onboarding flags,
+    // otherwise clearAllAppTables can delete sync_state mid-write and lock SQLite.
+    const userId = (await getSession())?.user?.id;
+    if (userId) {
+      await bindAccount(userId);
+    }
     await startPostSignupOnboarding();
     setNeedsGoalsSetup(true);
     setNeedsAiSetup(true);
     setNeedsStepsSetup(true);
     return { ok: true as const };
-  }, []);
+  }, [bindAccount]);
+
+  const signInGuest = useCallback(async () => {
+    // Wipe first so guest always restarts onboarding from a blank slate.
+    await awaitSyncIdle();
+    await clearAllAppTables();
+    await clearOnboardingFlags();
+
+    const result = await signInAsGuest();
+    if (!result.ok) return result;
+
+    const userId = result.user.id;
+    await bindAccount(userId);
+    await startPostSignupOnboarding();
+    setNeedsGoalsSetup(true);
+    setNeedsAiSetup(true);
+    setNeedsStepsSetup(true);
+    return { ok: true as const };
+  }, [bindAccount]);
 
   const finishAiOnboarding = useCallback(async () => {
     await completeAiOnboarding();
@@ -221,6 +285,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       finishStepsOnboarding,
       signIn,
       signUp,
+      signInGuest,
       signOutUser,
       sendPasswordReset: resetPassword,
       syncNow,
@@ -238,6 +303,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       finishStepsOnboarding,
       signIn,
       signUp,
+      signInGuest,
       signOutUser,
       syncNow,
     ]

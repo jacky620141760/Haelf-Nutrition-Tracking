@@ -1,4 +1,4 @@
-import { getDb } from '../../db/database';
+import { clearAllAppTables, getDb } from '../../db/database';
 import {
   deleteOutboxIds,
   getSyncMeta,
@@ -169,6 +169,15 @@ function toRemoteRow(table: SyncableTable, row: Record<string, unknown>, userId:
       week_start: row.week_start,
       step_mode: row.step_mode,
       exercise_calories_enabled: Boolean(row.exercise_calories_enabled),
+      sex: row.sex ?? null,
+      age_years: row.age_years ?? null,
+      height_cm: row.height_cm ?? null,
+      activity_level: row.activity_level ?? null,
+      current_weight_kg: row.current_weight_kg ?? null,
+      target_weight_kg: row.target_weight_kg ?? null,
+      plan_weeks: row.plan_weeks ?? null,
+      tdee_mode: row.tdee_mode ?? 'auto',
+      tdee_kcal: row.tdee_kcal ?? null,
     },
   };
   return map[table];
@@ -230,13 +239,66 @@ async function pushAppPreferences(userId: string): Promise<void> {
     remoteRow.id = canonicalId;
     return remoteRow;
   });
-  const { error } = await supabase.from('app_preferences').upsert(payload, { onConflict: 'user_id' });
+  let { error } = await supabase.from('app_preferences').upsert(payload, { onConflict: 'user_id' });
+  // Older Supabase projects may lack body-plan columns — retry without them so goals sync still completes.
+  if (error && /column|schema cache/i.test(error.message)) {
+    const stripped = payload.map((row) => {
+      const next = { ...row };
+      delete next.sex;
+      delete next.age_years;
+      delete next.height_cm;
+      delete next.activity_level;
+      delete next.current_weight_kg;
+      delete next.target_weight_kg;
+      delete next.plan_weeks;
+      delete next.tdee_mode;
+      delete next.tdee_kcal;
+      return next;
+    });
+    ({ error } = await supabase.from('app_preferences').upsert(stripped, { onConflict: 'user_id' }));
+  }
   if (error) throw new Error(`app_preferences push failed: ${error.message}`);
+}
+
+async function pushDailyGoalVersions(userId: string): Promise<void> {
+  await ensureCloudIds('daily_goal_versions');
+  const rows = await getDb().getAllAsync<Record<string, unknown>>(
+    `SELECT * FROM daily_goal_versions`
+  );
+  if (!rows.length) return;
+
+  for (const row of rows) {
+    const effectiveDate = String(row.effective_date);
+    const { data: remote, error: fetchError } = await supabase
+      .from('daily_goal_versions')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('effective_date', effectiveDate)
+      .maybeSingle();
+    if (fetchError) throw new Error(`daily_goal_versions push failed: ${fetchError.message}`);
+
+    const canonicalId = remote?.id ?? String(row.cloud_id ?? newCloudId());
+    if (row.cloud_id !== canonicalId) {
+      await run(`UPDATE daily_goal_versions SET cloud_id = ? WHERE id = ?`, p(canonicalId, row.id));
+      row.cloud_id = canonicalId;
+    }
+
+    const payload = toRemoteRow('daily_goal_versions', row, userId);
+    payload.id = canonicalId;
+    const { error } = await supabase.from('daily_goal_versions').upsert(payload, {
+      onConflict: 'user_id,effective_date',
+    });
+    if (error) throw new Error(`daily_goal_versions push failed: ${error.message}`);
+  }
 }
 
 async function pushTable(table: SyncableTable, userId: string): Promise<void> {
   if (table === 'app_preferences') {
     await pushAppPreferences(userId);
+    return;
+  }
+  if (table === 'daily_goal_versions') {
+    await pushDailyGoalVersions(userId);
     return;
   }
   await ensureCloudIds(table);
@@ -458,18 +520,63 @@ async function applyRemoteRow(table: SyncableTable, remote: Record<string, unkno
   }
 
   if (table === 'app_preferences') {
-    await run(
-      `UPDATE app_preferences SET locale=?, water_unit=?, week_start=?, step_mode=?, exercise_calories_enabled=?, updated_at=?, cloud_id=? WHERE id=1`,
-      p(
-        remote.locale, remote.water_unit, remote.week_start, remote.step_mode,
-        remote.exercise_calories_enabled ? 1 : 0, updatedAt, cloudId
-      )
-    );
+    const hasBodyPlanFields =
+      'sex' in remote ||
+      'tdee_kcal' in remote ||
+      'current_weight_kg' in remote ||
+      'target_weight_kg' in remote;
+    if (hasBodyPlanFields) {
+      await run(
+        `UPDATE app_preferences SET
+           locale=?, water_unit=?, week_start=?, step_mode=?, exercise_calories_enabled=?,
+           sex=?, age_years=?, height_cm=?, activity_level=?,
+           current_weight_kg=?, target_weight_kg=?, plan_weeks=?,
+           tdee_mode=?, tdee_kcal=?,
+           updated_at=?, cloud_id=?
+         WHERE id=1`,
+        p(
+          remote.locale,
+          remote.water_unit,
+          remote.week_start,
+          remote.step_mode,
+          remote.exercise_calories_enabled ? 1 : 0,
+          remote.sex ?? null,
+          remote.age_years ?? null,
+          remote.height_cm ?? null,
+          remote.activity_level ?? null,
+          remote.current_weight_kg ?? null,
+          remote.target_weight_kg ?? null,
+          remote.plan_weeks ?? null,
+          remote.tdee_mode ?? 'auto',
+          remote.tdee_kcal ?? null,
+          updatedAt,
+          cloudId
+        )
+      );
+    } else {
+      await run(
+        `UPDATE app_preferences SET
+           locale=?, water_unit=?, week_start=?, step_mode=?, exercise_calories_enabled=?,
+           updated_at=?, cloud_id=?
+         WHERE id=1`,
+        p(
+          remote.locale,
+          remote.water_unit,
+          remote.week_start,
+          remote.step_mode,
+          remote.exercise_calories_enabled ? 1 : 0,
+          updatedAt,
+          cloudId
+        )
+      );
+    }
   }
 }
 
 /** Overlap incremental pulls so device clock skew cannot skip remote rows. */
 const PULL_OVERLAP_MS = 24 * 60 * 60 * 1000;
+/** Must stay ≤ Supabase max_rows (default 1000). */
+const PULL_PAGE_SIZE = 1000;
 
 function effectivePullSince(since: string | null): string | null {
   if (!since) return null;
@@ -483,24 +590,58 @@ function maxUpdatedAt(current: string | null, candidate: unknown): string | null
   return !current || next > current ? next : current;
 }
 
+function quoteFilterValue(value: string): string {
+  return `"${value.replace(/"/g, '')}"`;
+}
+
 async function pullTable(
   table: SyncableTable,
   userId: string,
   since: string | null,
   watermark: string | null
 ): Promise<string | null> {
-  let query = supabase.from(table).select('*').eq('user_id', userId);
-  if (since) query = query.gt('updated_at', since);
-  const { data, error } = await query;
-  if (error) throw new Error(`${table} pull failed: ${error.message}`);
   let nextWatermark = watermark;
-  for (const remote of data ?? []) {
-    await applyRemoteRow(table, remote as Record<string, unknown>);
-    nextWatermark = maxUpdatedAt(
-      nextWatermark,
-      (remote as Record<string, unknown>).updated_at
-    );
+  let cursorUpdatedAt: string | null = null;
+  let cursorId: string | null = null;
+
+  for (;;) {
+    let query = supabase
+      .from(table)
+      .select('*')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(PULL_PAGE_SIZE);
+
+    if (cursorUpdatedAt != null && cursorId != null) {
+      const at = quoteFilterValue(cursorUpdatedAt);
+      const id = quoteFilterValue(cursorId);
+      query = query.or(`updated_at.gt.${at},and(updated_at.eq.${at},id.gt.${id})`);
+    } else if (since) {
+      query = query.gt('updated_at', since);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new Error(`${table} pull failed: ${error.message}`);
+
+    const rows = (data ?? []) as Record<string, unknown>[];
+    for (const remote of rows) {
+      await applyRemoteRow(table, remote);
+      nextWatermark = maxUpdatedAt(nextWatermark, remote.updated_at);
+    }
+
+    if (rows.length < PULL_PAGE_SIZE) break;
+
+    const last = rows[rows.length - 1];
+    const lastUpdatedAt = last.updated_at != null ? String(last.updated_at) : '';
+    const lastId = last.id != null ? String(last.id) : '';
+    if (!lastUpdatedAt || !lastId) {
+      throw new Error(`${table} pull failed: page missing updated_at/id for keyset`);
+    }
+    cursorUpdatedAt = lastUpdatedAt;
+    cursorId = lastId;
   }
+
   return nextWatermark;
 }
 
@@ -529,7 +670,30 @@ async function drainOutbox(): Promise<void> {
 export type SyncResult = { ok: true } | { ok: false; message: string };
 
 let syncInFlight: Promise<SyncResult> | null = null;
+let syncInFlightUserId: string | null = null;
 let syncQueued = false;
+
+/**
+ * Persist owner before any push/pull. If another account was bound, wipe local
+ * rows first so stale data cannot upload under the new user_id.
+ */
+export async function prepareAccountForSync(userId: string): Promise<{ cleared: boolean }> {
+  const bound = await getBoundUserId();
+  let cleared = false;
+  if (bound && bound !== '' && bound !== userId) {
+    await clearAllAppTables();
+    cleared = true;
+  }
+  await setSyncMeta('bound_user_id', userId);
+  if (cleared) {
+    await setSyncMeta('last_pull_at', '');
+  }
+  return { cleared };
+}
+
+export async function awaitSyncIdle(): Promise<void> {
+  if (syncInFlight) await syncInFlight;
+}
 
 async function performFullSync(userId: string): Promise<SyncResult> {
   if (!isSupabaseConfigured()) {
@@ -541,6 +705,7 @@ async function performFullSync(userId: string): Promise<SyncResult> {
   do {
     syncQueued = false;
     try {
+      await prepareAccountForSync(userId);
       const since = await getSyncMeta('last_pull_at');
       const pullSince = effectivePullSince(since);
       for (const table of TABLES) await pushTable(table, userId);
@@ -569,13 +734,23 @@ async function performFullSync(userId: string): Promise<SyncResult> {
 }
 
 export function runFullSync(userId: string): Promise<SyncResult> {
-  if (!syncInFlight) {
-    syncInFlight = performFullSync(userId).finally(() => {
-      syncInFlight = null;
-    });
-  } else {
+  if (syncInFlight && syncInFlightUserId === userId) {
     syncQueued = true;
+    return syncInFlight;
   }
+  if (syncInFlight && syncInFlightUserId !== userId) {
+    const previous = syncInFlight;
+    return previous.then(
+      () => runFullSync(userId),
+      () => runFullSync(userId)
+    );
+  }
+
+  syncInFlightUserId = userId;
+  syncInFlight = performFullSync(userId).finally(() => {
+    syncInFlight = null;
+    syncInFlightUserId = null;
+  });
   return syncInFlight;
 }
 

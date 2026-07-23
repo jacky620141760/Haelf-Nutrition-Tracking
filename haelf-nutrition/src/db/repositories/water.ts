@@ -107,5 +107,14 @@ export async function upsertWaterGoalForDate(
 }
 
 export async function upsertOngoingWaterGoal(ml: number): Promise<void> {
+  assertWritable();
+  const now = new Date().toISOString();
+  await getDb().runAsync(
+    `UPDATE water_goal_versions
+     SET deleted_at = ?, updated_at = ?
+     WHERE effective_date != ?
+       AND (deleted_at IS NULL OR deleted_at = '')`,
+    [now, now, ONGOING_GOAL_EFFECTIVE_DATE]
+  );
   return upsertWaterGoalForDate(ONGOING_GOAL_EFFECTIVE_DATE, ml);
 }

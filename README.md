@@ -189,19 +189,20 @@ The repository includes Ubuntu/PM2 helpers in `haelf-nutrition/scripts/vm/`. Cop
 
 ## Validation
 
-Run all available checks before opening a pull request:
+Run the complete local validation before opening a pull request:
 
 ```sh
-npm run typecheck
-npm run verify:domain
-npm run verify:repositories
+npm run check
+npm run export:web
 ```
 
-- `typecheck` checks the TypeScript project without emitting files.
-- `verify:domain` exercises pure nutrition and health-domain rules.
-- `verify:repositories` checks SQLite repository behavior against an in-memory database.
+The combined `check` command runs:
 
-The project does not yet include a general test runner, lint script, or CI workflow. Contributions that add these are welcome, but should avoid changing behavior unrelated to the proposed work.
+- `lint` — Expo ESLint rules
+- `typecheck` — strict TypeScript checking without emitted files
+- `test` — domain and SQLite repository verification scripts
+
+GitHub Actions runs the same checks and exports the web preview for every pull request and push to `main` or `master`.
 
 ## Privacy and security
 
@@ -216,9 +217,7 @@ Haelf Nutrition handles health-related data. Treat every deployment as sensitive
 - Camera, photo-library, and motion permissions are requested only for related features.
 - Never commit `.env`, `.env.vm`, signing certificates, service-role keys, database dumps, production exports, or user data.
 
-Before publishing a fork, scan both the working tree and full Git history for secrets. If a credential was ever committed, removing the file is insufficient: revoke or rotate the credential and clean the history before publishing.
-
-For security vulnerabilities, use the repository host's private security-advisory feature rather than opening a public issue. Do not include real health records, access tokens, or other personal data in reports.
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting and [the security review](docs/SECURITY_REVIEW.md) for the latest repository, Supabase, and Edge Function findings.
 
 ## Known limitations
 
@@ -228,22 +227,16 @@ For security vulnerabilities, use the repository host's private security-advisor
 - Open Food Facts data can be incomplete or inaccurate and must be reviewed by the user.
 - AI estimates can be inaccurate and must not be treated as medical or dietary advice.
 - Local Supabase migration and seed automation is incomplete.
-- Automated linting, a general test suite, and CI are not yet configured.
+- Automated verification currently uses focused domain and repository scripts rather than a general test framework.
 - App Store and Play Store release automation is outside the current project scope.
 
 Detailed product behavior and acceptance criteria are documented in `haelf-nutrition/requirements.md`.
 
 ## Contributing
 
-Contributions are welcome.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), search the [issue tracker](https://github.com/jacky620141760/Haelf-Nutrition-Tracking/issues), and submit security findings through GitHub's [private advisory form](https://github.com/jacky620141760/Haelf-Nutrition-Tracking/security/advisories/new).
 
-1. Fork the repository and create a focused branch.
-2. Install dependencies with `npm ci`.
-3. Do not commit local environment files or credentials.
-4. Keep domain rules pure where possible and database access inside repositories.
-5. Preserve offline behavior, localization, validation, and row-level data isolation.
-6. Run every command in [Validation](#validation).
-7. Open a pull request describing the problem, solution, platforms tested, and any schema or privacy impact.
+## License
 
-For visible UI changes, include screenshots using sample data only. For schema changes, include a forward migration and explain compatibility with existing local and cloud data.
+This project is available under the [MIT License](LICENSE). Third-party packages, data sources, and services remain subject to their own licenses and terms.
 

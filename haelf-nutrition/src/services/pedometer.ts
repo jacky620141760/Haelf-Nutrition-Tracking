@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import { Pedometer } from 'expo-sensors';
 import type { DailyStepTotal } from '../domain/types';
 import { getDailyStepTotal, upsertDailyStepTotal } from '../db/repositories/steps';
+import { startOfAppDay, endOfAppDay } from '../domain/dates';
 
 export type PedometerStatus =
   | { available: false; granted: false; reason: 'unavailable' }
@@ -22,11 +23,6 @@ export async function getPedometerStatus(
   return { available: true, granted: true };
 }
 
-function startOfLocalDay(localDate: string): Date {
-  const [year, month, day] = localDate.split('-').map(Number);
-  return new Date(year, month - 1, day, 0, 0, 0, 0);
-}
-
 async function savePedometerSteps(
   localDate: string,
   steps: number
@@ -43,7 +39,15 @@ export async function syncPedometerToday(
 ): Promise<DailyStepTotal | null> {
   const status = await getPedometerStatus(requestPermission);
   if (!status.granted || Platform.OS !== 'ios') return getDailyStepTotal(localDate);
-  const result = await Pedometer.getStepCountAsync(startOfLocalDay(localDate), new Date());
+  const start = startOfAppDay(localDate);
+  const end = new Date();
+  // If querying a past device-local day, cap the window at that day's end.
+  const dayEnd = endOfAppDay(localDate);
+  const rangeEnd = end.getTime() < dayEnd.getTime() ? end : dayEnd;
+  if (rangeEnd.getTime() <= start.getTime()) {
+    return savePedometerSteps(localDate, 0);
+  }
+  const result = await Pedometer.getStepCountAsync(start, rangeEnd);
   return savePedometerSteps(localDate, result.steps);
 }
 
@@ -53,9 +57,13 @@ export async function startPedometerWatch(
 ): Promise<ReturnType<typeof Pedometer.watchStepCount> | null> {
   const status = await getPedometerStatus(false);
   if (!status.granted) return null;
-  const initial = await syncPedometerToday(localDate);
-  const baseline = initial?.source === 'pedometer' ? initial.steps : 0;
-  return Pedometer.watchStepCount((result) => {
-    void savePedometerSteps(localDate, baseline + result.steps).then(onUpdate);
+  // Prefer absolute daily totals from OS; live watch only refreshes the same window.
+  const pull = async () => {
+    const total = await syncPedometerToday(localDate);
+    if (total) onUpdate(total);
+  };
+  await pull();
+  return Pedometer.watchStepCount(() => {
+    void pull();
   });
 }

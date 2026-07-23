@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import { BUILTIN_AI, isAiSettingsFrozen } from './ai/builtinConfig';
 
 const KEY = 'haelf_ai_api_key';
 
@@ -11,6 +12,7 @@ export function isWebPreview(): boolean {
 }
 
 export async function saveApiKey(apiKey: string): Promise<void> {
+  if (isAiSettingsFrozen()) return;
   if (isWebPreview()) {
     webMemoryKey = apiKey;
     return;
@@ -19,6 +21,7 @@ export async function saveApiKey(apiKey: string): Promise<void> {
 }
 
 export async function getApiKey(): Promise<string | null> {
+  if (isAiSettingsFrozen()) return BUILTIN_AI.apiKey;
   if (isWebPreview()) {
     return webMemoryKey;
   }
@@ -26,6 +29,7 @@ export async function getApiKey(): Promise<string | null> {
 }
 
 export async function clearApiKey(): Promise<void> {
+  if (isAiSettingsFrozen()) return;
   if (isWebPreview()) {
     webMemoryKey = null;
     return;

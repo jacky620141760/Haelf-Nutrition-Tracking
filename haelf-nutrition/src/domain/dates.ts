@@ -1,27 +1,54 @@
 import type { TimeZoneMetadata } from './types';
 
-export function getTimeZoneMetadata(date = new Date()): TimeZoneMetadata {
-  const iana = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  const utcOffsetMinutes = -date.getTimezoneOffset();
-  return { iana, utcOffsetMinutes };
+/** IANA zone from the device (e.g. Asia/Hong_Kong, America/New_York). */
+export function getDeviceTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
 }
 
+export function getTimeZoneMetadata(date = new Date()): TimeZoneMetadata {
+  return {
+    iana: getDeviceTimeZone(),
+    utcOffsetMinutes: -date.getTimezoneOffset(),
+  };
+}
+
+/** YYYY-MM-DD in the device time zone. */
 export function toLocalDateString(date = new Date()): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: getDeviceTimeZone(),
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
 }
 
 export function utcNowIso(date = new Date()): string {
   return date.toISOString();
 }
 
+/** Device-local midnight for a calendar date (YYYY-MM-DD from toLocalDateString). */
+export function startOfAppDay(localDate: string): Date {
+  const [y, m, d] = localDate.split('-').map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
+}
+
+/** Device-local end of that calendar day. */
+export function endOfAppDay(localDate: string): Date {
+  const [y, m, d] = localDate.split('-').map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59, 999);
+}
+
 export function addLocalDays(localDate: string, delta: number): string {
   const [y, m, d] = localDate.split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() + delta);
-  return toLocalDateString(dt);
+  const utc = new Date(Date.UTC(y, m - 1, d + delta));
+  const yy = utc.getUTCFullYear();
+  const mm = String(utc.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(utc.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
 }
 
 export function localDateRangeEnding(endDate: string, days: number): string[] {
@@ -32,16 +59,19 @@ export function localDateRangeEnding(endDate: string, days: number): string[] {
   return result;
 }
 
-export function weekDates(localDate: string, weekStart: 0 | 1 = 1): string[] {
+/** Weeks always start on Monday (ISO-style). */
+export function weekDates(localDate: string, _weekStart: 0 | 1 = 1): string[] {
   const date = parseLocalDateToDate(localDate);
-  const offset = (date.getDay() - weekStart + 7) % 7;
+  const dow = date.getUTCDay(); // 0 Sun … 6 Sat
+  const offset = (dow - 1 + 7) % 7;
   const start = addLocalDays(localDate, -offset);
   return Array.from({ length: 7 }, (_, index) => addLocalDays(start, index));
 }
 
+/** Noon UTC for a calendar date — stable weekday math. */
 export function parseLocalDateToDate(localDate: string): Date {
   const [y, m, d] = localDate.split('-').map(Number);
-  return new Date(y, m - 1, d, 12, 0, 0);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
 }
 
 export function isValidLocalDate(localDate: string): boolean {
@@ -95,7 +125,7 @@ export function resolveEntryTimeForSave(
 export type DayBoundaryListener = (localDate: string) => void;
 
 /**
- * Day_Boundary_Manager: updates current Local_Date within 60s of midnight or foreground.
+ * Day_Boundary_Manager: updates current Local_Date within 60s of device midnight or foreground.
  */
 export class DayBoundaryManager {
   private currentLocalDate: string;
@@ -143,7 +173,7 @@ export class DayBoundaryManager {
     }
   }
 
-  /** Recompute Local_Date + TZ for an edited wall-clock time using device TZ now. */
+  /** Recompute Local_Date + TZ for an edited wall-clock time using device calendar. */
   metadataForEditedTime(date: Date): {
     utcTimestamp: string;
     localDate: string;

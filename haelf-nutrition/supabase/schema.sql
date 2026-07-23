@@ -162,9 +162,32 @@ create table if not exists public.app_preferences (
   week_start integer not null default 1 check (week_start in (0,1)),
   step_mode text not null default 'pedometer' check (step_mode in ('pedometer','manual')),
   exercise_calories_enabled boolean not null default true,
+  sex text check (sex is null or sex in ('male','female')),
+  age_years double precision,
+  height_cm double precision,
+  activity_level text check (
+    activity_level is null
+    or activity_level in ('sedentary','light','moderate','active','very_active')
+  ),
+  current_weight_kg double precision,
+  target_weight_kg double precision,
+  plan_weeks double precision,
+  tdee_mode text not null default 'auto' check (tdee_mode in ('auto','manual')),
+  tdee_kcal double precision,
   updated_at timestamptz not null default now(),
   deleted_at timestamptz
 );
+
+-- Existing projects: add body-plan columns if missing
+alter table public.app_preferences add column if not exists sex text;
+alter table public.app_preferences add column if not exists age_years double precision;
+alter table public.app_preferences add column if not exists height_cm double precision;
+alter table public.app_preferences add column if not exists activity_level text;
+alter table public.app_preferences add column if not exists current_weight_kg double precision;
+alter table public.app_preferences add column if not exists target_weight_kg double precision;
+alter table public.app_preferences add column if not exists plan_weeks double precision;
+alter table public.app_preferences add column if not exists tdee_mode text default 'auto';
+alter table public.app_preferences add column if not exists tdee_kcal double precision;
 
 create table if not exists public.saved_meals (
   id uuid primary key default gen_random_uuid(),

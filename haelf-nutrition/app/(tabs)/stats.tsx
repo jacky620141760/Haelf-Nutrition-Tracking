@@ -49,7 +49,7 @@ export default function StatsScreen() {
   const load = useCallback(async (targetEndDate: string) => {
     const prefs = await getPreferences();
     setFoodLocale(prefs.locale === 'en' ? 'en' : 'zh-TW');
-    const foodDays = weekDates(targetEndDate, prefs.weekStart);
+    const foodDays = weekDates(targetEndDate, 1);
     const foods = await listFoodEntriesInDateRange(foodDays[0], foodDays[foodDays.length - 1]);
     const goals = await listGoalVersions();
     const byDate = new Map<string, typeof foods>();

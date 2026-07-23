@@ -215,19 +215,23 @@ assert(!sparseWeeks.some((p) => p.value == null && sparseWeeks.indexOf(p) === 0)
 
 // Migration registry
 assert(
-  JSON.stringify(pendingMigrations(0).map((migration) => migration.version)) === '[1,2,3]',
+  JSON.stringify(pendingMigrations(0).map((migration) => migration.version)) === '[1,2,3,4]',
   'migration v0 to current'
 );
 assert(
-  JSON.stringify(pendingMigrations(1).map((migration) => migration.version)) === '[2,3]',
+  JSON.stringify(pendingMigrations(1).map((migration) => migration.version)) === '[2,3,4]',
   'migration v1 to current'
 );
 assert(
-  JSON.stringify(pendingMigrations(2).map((migration) => migration.version)) === '[3]',
-  'migration v2 to v3'
+  JSON.stringify(pendingMigrations(2).map((migration) => migration.version)) === '[3,4]',
+  'migration v2 to current'
 );
-assert(pendingMigrations(3).length === 0, 'current schema has no migration');
-assertThrows(() => pendingMigrations(4, 3), 'newer database must be rejected');
+assert(
+  JSON.stringify(pendingMigrations(3).map((migration) => migration.version)) === '[4]',
+  'migration v3 to v4'
+);
+assert(pendingMigrations(4).length === 0, 'current schema has no migration');
+assertThrows(() => pendingMigrations(5, 4), 'newer database must be rejected');
 
 // v2 daily summary, water, recipes, streak, and steps
 const summary = buildDailySummary({
@@ -298,8 +302,10 @@ if (parsed.ok) {
   assert(parsed.suggestion.name === suggestion.name, 'roundtrip name');
   assert(parsed.suggestion.kcal === suggestion.kcal, 'roundtrip kcal');
 }
-assert(!parseAiResponse('```json\n' + json + '\n```').ok, 'reject fence');
-assert(!parseAiResponse(json + '\nextra').ok, 'reject extra');
+assert(parseAiResponse('```json\n' + json + '\n```').ok, 'accept fence');
+assert(parseAiResponse('Here you go:\n' + json).ok, 'accept prose prefix');
+assert(!parseAiResponse('not json at all').ok, 'reject non-json');
+
 
 // Open Food Facts unit mapping
 const offKj = mapOffToDraft(

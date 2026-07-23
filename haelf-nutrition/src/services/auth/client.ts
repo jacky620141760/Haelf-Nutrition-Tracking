@@ -71,6 +71,31 @@ export async function signInWithEmail(email: string, password: string): Promise<
   return { ok: true, user: data.user, session: data.session };
 }
 
+/** Temporary test helper: new identity each call so onboarding can restart from scratch. */
+export async function signInAsGuest(): Promise<AuthResult> {
+  if (!isSupabaseConfigured()) {
+    return { ok: false, message: 'Supabase is not configured. Set EXPO_PUBLIC_SUPABASE_URL and ANON_KEY.' };
+  }
+
+  await supabase.auth.signOut();
+
+  const anonymous = await supabase.auth.signInAnonymously();
+  if (!anonymous.error && anonymous.data.user) {
+    return { ok: true, user: anonymous.data.user, session: anonymous.data.session };
+  }
+
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const email = `guest-${stamp}@haelf.guest`;
+  const password = `Guest-${stamp}-Aa1`;
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) {
+    const anonHint = anonymous.error?.message ? ` (anonymous: ${anonymous.error.message})` : '';
+    return { ok: false, message: `${error.message}${anonHint}` };
+  }
+  if (!data.user) return { ok: false, message: 'Guest sign-in failed' };
+  return { ok: true, user: data.user, session: data.session };
+}
+
 export async function signOut(): Promise<void> {
   await supabase.auth.signOut();
 }

@@ -7,7 +7,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import NetInfo from '@react-native-community/netinfo';
 import { useApp } from '@/src/context/AppContext';
 import { getAiSettings, setAiConsent, setVisionCapability } from '@/src/db/repositories/aiSettings';
-import { analyzeFoodWithAi, checkVisionCapability } from '@/src/services/ai/client';
+import { analyzeFoodWithAi, checkVisionCapability, modelLikelySupportsVision } from '@/src/services/ai/client';
 import { setPendingDraft } from '@/src/services/draftStore';
 import { Field, PrimaryButton } from '@/src/components/ui';
 import { zhTW } from '@/src/i18n/zh-TW';
@@ -46,16 +46,8 @@ async function readUriAsBase64(uri: string): Promise<string> {
 }
 
 /** Re-encode into a new JPEG cache file so source EXIF is not transmitted. */
-async function pickImageStripped(): Promise<PickedImage | null> {
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ['images'],
-    quality: 1,
-    base64: false,
-    exif: false,
-  });
-  if (result.canceled || !result.assets[0]) return null;
-  const asset = result.assets[0];
-  const context = ImageManipulator.manipulate(asset.uri);
+async function processPickedAsset(uri: string): Promise<PickedImage> {
+  const context = ImageManipulator.manipulate(uri);
   const rendered = await context.renderAsync();
   const encoded = await rendered.saveAsync({
     format: SaveFormat.JPEG,
@@ -74,12 +66,44 @@ async function pickImageStripped(): Promise<PickedImage | null> {
   }
 }
 
+async function pickImageStripped(): Promise<PickedImage | null> {
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    quality: 1,
+    base64: false,
+    exif: false,
+  });
+  if (result.canceled || !result.assets[0]) return null;
+  return processPickedAsset(result.assets[0].uri);
+}
+
+async function takePhotoStripped(): Promise<PickedImage | null | 'denied'> {
+  const current = await ImagePicker.getCameraPermissionsAsync();
+  let granted = current.granted;
+  if (!granted) {
+    const asked = await ImagePicker.requestCameraPermissionsAsync();
+    granted = asked.granted;
+  }
+  if (!granted) return 'denied';
+
+  const result = await ImagePicker.launchCameraAsync({
+    mediaTypes: ['images'],
+    quality: 1,
+    base64: false,
+    exif: false,
+    cameraType: ImagePicker.CameraType.back,
+  });
+  if (result.canceled || !result.assets[0]) return null;
+  return processPickedAsset(result.assets[0].uri);
+}
+
 type AnalyzeRequest = {
   endpointUrl: string;
   model: string;
   text?: string;
   imageBase64?: string;
   mimeType?: string;
+  imageUri?: string;
   tempUri?: string;
 };
 
@@ -145,29 +169,41 @@ export default function AiFoodScreen() {
     requestController.current = controller;
     setBusy(true);
     setStatus(zhTW.common.loading);
+    let keepImage = false;
     try {
       let useImage = !!request.imageBase64;
       if (useImage) {
         let cap = visionOk;
         if (cap !== true) {
-          setStatus('檢查模型能力…');
-          const result = await checkVisionCapability(
-            request.endpointUrl,
-            request.model,
-            controller.signal
-          );
-          if (controller.signal.aborted) return;
-          if (result === 'supported') {
+          // Known VL models (e.g. qwen-vl / qwen3-vl) — never drop the photo.
+          if (modelLikelySupportsVision(request.model)) {
             cap = true;
             await setVisionCapability(true);
             setVisionOk(true);
           } else {
-            await setVisionCapability(result === 'unsupported' ? false : null);
-            setVisionOk(result === 'unsupported' ? false : null);
-            useImage = false;
-            setStatus(zhTW.ai.capabilityFail);
-            Alert.alert(zhTW.ai.capabilityFail);
-            if (!request.text?.trim()) return;
+            setStatus('檢查模型能力…');
+            const result = await checkVisionCapability(
+              request.endpointUrl,
+              request.model,
+              controller.signal
+            );
+            if (controller.signal.aborted) return;
+            if (result === 'supported') {
+              cap = true;
+              await setVisionCapability(true);
+              setVisionOk(true);
+            } else if (result === 'unsupported') {
+              await setVisionCapability(false);
+              setVisionOk(false);
+              useImage = false;
+              setStatus(zhTW.ai.capabilityFail);
+              Alert.alert(zhTW.ai.capabilityFail);
+              if (!request.text?.trim()) return;
+            } else {
+              // unknown: still send the image; better than silently using text only
+              cap = true;
+              setVisionOk(null);
+            }
           }
         }
       }
@@ -183,12 +219,22 @@ export default function AiFoodScreen() {
         text: request.text?.trim() || undefined,
         imageBase64: useImage ? request.imageBase64 : undefined,
         mimeType: useImage ? request.mimeType : undefined,
+        imageUri: useImage ? request.imageUri ?? request.tempUri : undefined,
         signal: controller.signal,
       });
 
       if (!result.ok) {
         if (result.reason === 'cancelled') {
           setStatus('已取消');
+          return;
+        }
+        if (result.reason === 'not_food') {
+          keepImage = true;
+          Alert.alert(
+            zhTW.ai.notFoodTitle,
+            `${zhTW.ai.notFoodBody}${result.message ? `\n\n${result.message}` : ''}`,
+            [{ text: zhTW.common.confirm }]
+          );
           return;
         }
         Alert.alert(result.message, undefined, [
@@ -217,10 +263,12 @@ export default function AiFoodScreen() {
       Alert.alert(e instanceof Error ? e.message : '錯誤');
     } finally {
       requestController.current = null;
-      deleteTemporaryImage(request.tempUri);
-      if (!request.tempUri || imageRef.current?.tempUri === request.tempUri) {
-        imageRef.current = null;
-        setImage(null);
+      if (!keepImage) {
+        deleteTemporaryImage(request.tempUri);
+        if (!request.tempUri || imageRef.current?.tempUri === request.tempUri) {
+          imageRef.current = null;
+          setImage(null);
+        }
       }
       setBusy(false);
       setStatus('');
@@ -228,11 +276,16 @@ export default function AiFoodScreen() {
   };
 
   const onAnalyze = async () => {
-    if (!endpoint || !model) {
+    const isLogMeal = /logmeal\.com/i.test(endpoint);
+    if (!endpoint || (!model && !isLogMeal)) {
       Alert.alert('請先完成 AI 設定', undefined, [
         { text: '前往設定', onPress: () => router.push('/settings/ai') },
         { text: zhTW.common.cancel, style: 'cancel' },
       ]);
+      return;
+    }
+    if (isLogMeal && !image?.base64) {
+      Alert.alert('LogMeal 需要食物照片', '請先選擇圖片再分析。');
       return;
     }
     const net = await NetInfo.fetch();
@@ -246,10 +299,11 @@ export default function AiFoodScreen() {
     if (!ok) return;
     await runAnalyze({
       endpointUrl: endpoint,
-      model,
+      model: model || 'logmeal',
       text: text.trim() || undefined,
       imageBase64: image?.base64,
       mimeType: image?.mime,
+      imageUri: image?.uri,
       tempUri: image?.tempUri,
     });
   };
@@ -264,6 +318,9 @@ export default function AiFoodScreen() {
         {image && text ? ' + ' : ''}
         {text ? '文字' : ''}
       </Text>
+      {/logmeal\.com/i.test(endpoint) ? (
+        <Text style={styles.subHint}>{zhTW.ai.textHintLogMeal}</Text>
+      ) : null}
       <Field
         label={zhTW.ai.textDesc}
         value={text}
@@ -275,10 +332,33 @@ export default function AiFoodScreen() {
         <Image source={{ uri: image.uri }} style={styles.preview} accessibilityLabel="已選圖片" />
       ) : null}
       <PrimaryButton
+        label={zhTW.ai.takePhoto}
+        onPress={async () => {
+          try {
+            const img = await takePhotoStripped();
+            if (img === 'denied') {
+              Alert.alert(zhTW.ai.cameraPermission, undefined, [
+                { text: zhTW.ai.grantCamera },
+              ]);
+              return;
+            }
+            if (img) replaceImage(img);
+          } catch (e) {
+            Alert.alert(e instanceof Error ? e.message : '無法開啟相機');
+          }
+        }}
+        disabled={busy}
+      />
+      <View style={{ height: theme.space.sm }} />
+      <PrimaryButton
         label={zhTW.ai.pickImage}
         onPress={async () => {
-          const img = await pickImageStripped();
-          if (img) replaceImage(img);
+          try {
+            const img = await pickImageStripped();
+            if (img) replaceImage(img);
+          } catch (e) {
+            Alert.alert(e instanceof Error ? e.message : '無法選擇圖片');
+          }
         }}
         disabled={busy}
       />
@@ -322,6 +402,12 @@ const styles = StyleSheet.create({
     marginBottom: theme.space.md,
     fontWeight: '600',
   },
-  hint: { marginBottom: theme.space.md, color: theme.colors.lakeBlue, fontWeight: '600' },
+  hint: { marginBottom: theme.space.sm, color: theme.colors.lakeBlue, fontWeight: '600' },
+  subHint: {
+    marginBottom: theme.space.md,
+    color: theme.colors.textMuted,
+    fontSize: theme.font.small,
+    lineHeight: 18,
+  },
   preview: { width: '100%', height: 180, borderRadius: theme.radius, marginBottom: theme.space.md },
 });

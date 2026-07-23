@@ -1,5 +1,4 @@
 import * as SQLite from 'expo-sqlite';
-import { Platform } from 'react-native';
 import type { DbInitResult } from '../domain/types';
 import { pendingMigrations, SCHEMA_VERSION } from './migrations';
 
@@ -7,7 +6,8 @@ const DB_NAME = 'haelf_nutrition.db';
 
 let dbInstance: SQLite.SQLiteDatabase | null = null;
 let writeAllowed = true;
-let webTransactionQueue: Promise<void> = Promise.resolve();
+/** Serialize all transactional writes — prevents SQLite "database is locked" on signup/sync. */
+let dbWriteQueue: Promise<unknown> = Promise.resolve();
 let initPromise: Promise<DbInitResult> | null = null;
 let lastReadyResult: DbInitResult | null = null;
 
@@ -35,29 +35,28 @@ export function assertWritable(): void {
   }
 }
 
+export function enqueueDbWrite<T>(op: () => Promise<T>): Promise<T> {
+  const run = dbWriteQueue.then(op, op);
+  dbWriteQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 async function executeTransaction<T>(
   db: SQLite.SQLiteDatabase,
   task: (txn: SQLite.SQLiteDatabase) => Promise<T>
 ): Promise<T> {
-  if (Platform.OS === 'web') {
-    const run = webTransactionQueue.then(async () => {
-      let result!: T;
-      await db.withTransactionAsync(async () => {
-        result = await task(db);
-      });
-      return result;
+  return enqueueDbWrite(async () => {
+    let result!: T;
+    // Prefer same-connection transaction. Exclusive opens a second connection and
+    // locks out concurrent getDb() writes (common during signup bind + sync).
+    await db.withTransactionAsync(async () => {
+      result = await task(db);
     });
-    webTransactionQueue = run.then(
-      () => undefined,
-      () => undefined
-    );
-    return run;
-  }
-  let result!: T;
-  await db.withExclusiveTransactionAsync(async (txn) => {
-    result = await task(txn);
+    return result;
   });
-  return result;
 }
 
 export async function runInTransaction<T>(
@@ -108,11 +107,20 @@ async function openAndMigrateDatabase(): Promise<DbInitResult> {
     }
     const db = dbInstance;
     await db.execAsync('PRAGMA foreign_keys = ON');
+    try {
+      await db.execAsync('PRAGMA journal_mode = WAL');
+      await db.execAsync('PRAGMA busy_timeout = 5000');
+    } catch {
+      try {
+        await db.execAsync('PRAGMA busy_timeout = 5000');
+      } catch {
+        /* ignore */
+      }
+    }
 
     const hasMeta = await tableExists(db, 'meta');
     let version = hasMeta ? await getSchemaVersion(db) : 0;
     if (version === null) {
-      // Corrupt / unreadable
       writeAllowed = false;
       return { status: 'unsupported', error: '資料庫無法讀取' };
     }
@@ -184,6 +192,7 @@ async function openAndMigrateDatabase(): Promise<DbInitResult> {
 }
 
 export async function clearAllAppTables(): Promise<void> {
+  const now = new Date().toISOString();
   await runInTransaction(async (txn) => {
     await txn.execAsync(`
       DELETE FROM sync_outbox;
@@ -203,14 +212,21 @@ export async function clearAllAppTables(): Promise<void> {
       DELETE FROM water_goal_versions;
       DELETE FROM weight_entries;
       DELETE FROM app_preferences;
-      UPDATE ai_settings SET endpoint_url='', model='', vision_supported=NULL, consent_given=0, updated_at='${new Date().toISOString()}' WHERE id=1;
+      UPDATE ai_settings SET endpoint_url='', model='', vision_supported=NULL, consent_given=0, updated_at='${now}' WHERE id=1;
     `);
+    await txn.runAsync(
+      `INSERT OR IGNORE INTO app_preferences
+        (id, locale, water_unit, week_start, step_mode, exercise_calories_enabled, updated_at)
+       VALUES (1, 'zh-TW', 'ml', 1, 'pedometer', 1, ?)`,
+      [now]
+    );
   });
 }
 
 export async function deleteDatabaseAndReopen(): Promise<DbInitResult> {
   initPromise = null;
   lastReadyResult = null;
+  dbWriteQueue = Promise.resolve();
   if (dbInstance) {
     await dbInstance.closeAsync();
     dbInstance = null;

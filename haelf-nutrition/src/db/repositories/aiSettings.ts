@@ -1,5 +1,6 @@
 import type { AiEndpointConfig } from '../../domain/types';
 import { assertWritable, getDb } from '../database';
+import { BUILTIN_AI, isAiSettingsFrozen } from '../../services/ai/builtinConfig';
 
 type Row = {
   endpoint_url: string;
@@ -10,6 +11,14 @@ type Row = {
 
 export async function getAiSettings(): Promise<AiEndpointConfig> {
   const row = await getDb().getFirstAsync<Row>(`SELECT * FROM ai_settings WHERE id = 1`);
+  if (isAiSettingsFrozen()) {
+    return {
+      endpointUrl: BUILTIN_AI.endpointUrl,
+      model: BUILTIN_AI.model,
+      visionSupported: true,
+      consentGiven: !!row?.consent_given,
+    };
+  }
   return {
     endpointUrl: row?.endpoint_url ?? '',
     model: row?.model ?? '',
@@ -26,6 +35,7 @@ export async function saveAiSettings(input: {
   model: string;
   resetCapability?: boolean;
 }): Promise<void> {
+  if (isAiSettingsFrozen()) return;
   assertWritable();
   const now = new Date().toISOString();
   if (input.resetCapability) {

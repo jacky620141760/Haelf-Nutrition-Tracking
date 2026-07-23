@@ -13,7 +13,6 @@ import {
   deleteFoodEntry,
   listFoodEntriesByDate,
 } from '@/src/db/repositories/food';
-import { setDiaryCompleted } from '@/src/db/repositories/diaryStatus';
 import type { FoodEntry, MealType } from '@/src/domain/types';
 import { theme } from '@/src/theme';
 import { DailyNutritionHero } from '@/src/components/nutrition/DailyNutritionHero';
@@ -22,7 +21,7 @@ import { WeekDateStrip } from '@/src/components/today/WeekDateStrip';
 import { HealthyHabits } from '@/src/components/today/HealthyHabits';
 import { useDiaryDay } from '@/src/hooks/useDiaryDay';
 import { displayWeightKg } from '@/src/domain/nutrition';
-import { MfpButton, MfpCard } from '@/src/components/ui';
+import { MfpCard } from '@/src/components/ui';
 import { addLocalDays } from '@/src/domain/dates';
 import { copyMealEntries } from '@/src/services/copyMeal';
 import { chooseAction, confirmDialog } from '@/src/services/dialog';
@@ -42,7 +41,7 @@ export default function DiaryScreen() {
     t,
   } = useApp();
   const router = useRouter();
-  const { entries, summary, latestWeight, streak, reload } = useDiaryDay(
+  const { entries, summary, latestWeight, streak, deficit, reload } = useDiaryDay(
     selectedDate,
     refreshToken
   );
@@ -114,7 +113,7 @@ export default function DiaryScreen() {
         <WeekDateStrip
           selectedDate={selectedDate}
           todayDate={todayLocalDate}
-          weekStart={preferences.weekStart}
+          weekStart={1}
           locale={preferences.locale}
           onSelect={setSelectedDate}
         />
@@ -135,6 +134,18 @@ export default function DiaryScreen() {
           goal={goal}
           exerciseKcal={summary?.exerciseKcal ?? 0}
         />
+
+        {deficit ? (
+          <Text style={styles.deficitLine} accessibilityRole="text">
+            {deficit.deficitKcal > 0
+              ? `${t('diary.deficitLabel')} ${Math.abs(deficit.deficitKcal).toLocaleString('zh-TW')} kcal（${t('diary.deficitKg', { kg: Math.abs(deficit.approxKgLost).toFixed(2) })}）`
+              : deficit.deficitKcal < 0
+                ? `${t('diary.surplusLabel')} ${Math.abs(deficit.deficitKcal).toLocaleString('zh-TW')} kcal（${t('diary.surplusKg', { kg: Math.abs(deficit.approxKgLost).toFixed(2) })}）`
+                : `${t('diary.balanceNeutral')}（0 kg）`}
+          </Text>
+        ) : (
+          <Text style={styles.deficitHint}>{t('diary.deficitNeedTdee')}</Text>
+        )}
 
         <View style={styles.quickLinks}>
           <Pressable
@@ -183,14 +194,6 @@ export default function DiaryScreen() {
               </Text>
             </Pressable>
           </MfpCard>
-          <MfpButton
-            label={summary?.completedAt ? t('diary.completed') : t('diary.complete')}
-            variant={summary?.completedAt ? 'secondary' : 'primary'}
-            onPress={async () => {
-              await setDiaryCompleted(selectedDate, !summary?.completedAt);
-              bumpRefresh();
-            }}
-          />
         </View>
       </ScrollView>
     </View>
@@ -215,6 +218,22 @@ const styles = StyleSheet.create({
   },
   todayLink: { color: theme.colors.lakeBlue, marginTop: 4, fontWeight: '600' },
   streak: { color: theme.colors.textMuted, marginTop: 2, fontSize: theme.font.bodySmall },
+  deficitLine: {
+    textAlign: 'center',
+    paddingHorizontal: theme.space.md,
+    paddingBottom: theme.space.sm,
+    color: theme.colors.lakeBlue,
+    fontWeight: '600',
+    fontSize: theme.font.body,
+    lineHeight: 22,
+  },
+  deficitHint: {
+    textAlign: 'center',
+    paddingHorizontal: theme.space.md,
+    paddingBottom: theme.space.sm,
+    color: theme.colors.textMuted,
+    fontSize: theme.font.bodySmall,
+  },
   quickLinks: {
     flexDirection: 'row',
     justifyContent: 'center',

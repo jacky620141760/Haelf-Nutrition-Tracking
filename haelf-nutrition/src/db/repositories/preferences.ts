@@ -30,7 +30,8 @@ export async function getPreferences(): Promise<AppPreferences> {
     ? {
         locale: row.locale,
         waterUnit: row.water_unit,
-        weekStart: row.week_start,
+        // Weeks always start Monday — ignore legacy Sunday preference.
+        weekStart: 1,
         stepMode: row.step_mode,
         exerciseCaloriesEnabled: !!row.exercise_calories_enabled,
         updatedAt: row.updated_at,
@@ -43,7 +44,12 @@ export async function updatePreferences(
 ): Promise<AppPreferences> {
   assertWritable();
   const current = await getPreferences();
-  const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
+  const next = {
+    ...current,
+    ...patch,
+    weekStart: 1 as const,
+    updatedAt: new Date().toISOString(),
+  };
   await getDb().runAsync(
     `INSERT INTO app_preferences
       (id, locale, water_unit, week_start, step_mode, exercise_calories_enabled, updated_at)

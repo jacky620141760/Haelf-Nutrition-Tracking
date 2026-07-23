@@ -34,7 +34,7 @@ export default function LibraryScreen() {
 
   useFocusEffect(useCallback(() => { void load(); }, [load, refreshToken]));
 
-  const useFood = (item: FoodCatalogItem) => {
+  const addFood = (item: FoodCatalogItem) => {
     setPendingDraft({
       name: item.name,
       mealType: 'snack',
@@ -93,30 +93,30 @@ export default function LibraryScreen() {
       {visible.length === 0 ? <Text style={styles.empty}>{t('library.empty')}</Text> : null}
       {tab === 'foods'
         ? foods.map((item) => (
+          <MfpCard key={item.id}>
+            <Pressable onPress={() => addFood(item)} accessibilityRole="button">
+              <Text style={styles.name}>{item.name}</Text>
+              <Text style={styles.meta}>{item.sourceKcal} kcal · {item.basis === 'PER_100_G' ? '100 g' : '1 serving'}</Text>
+            </Pressable>
+          </MfpCard>
+        ))
+        : tab === 'meals'
+          ? meals.map((item) => (
             <MfpCard key={item.id}>
-              <Pressable onPress={() => useFood(item)} accessibilityRole="button">
+              <Pressable onPress={() => router.push(`/library/meal/${item.id}` as never)} accessibilityRole="button">
                 <Text style={styles.name}>{item.name}</Text>
-                <Text style={styles.meta}>{item.sourceKcal} kcal · {item.basis === 'PER_100_G' ? '100 g' : '1 serving'}</Text>
+                <Text style={styles.meta}>{item.items.length} items</Text>
               </Pressable>
             </MfpCard>
           ))
-        : tab === 'meals'
-          ? meals.map((item) => (
-              <MfpCard key={item.id}>
-                <Pressable onPress={() => router.push(`/library/meal/${item.id}` as never)} accessibilityRole="button">
-                  <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.meta}>{item.items.length} items</Text>
-                </Pressable>
-              </MfpCard>
-            ))
           : recipes.map((item) => (
-              <MfpCard key={item.id}>
-                <Pressable onPress={() => router.push(`/library/recipe/${item.id}` as never)} accessibilityRole="button">
-                  <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.meta}>{item.totalServings} servings · {item.ingredients.length} ingredients</Text>
-                </Pressable>
-              </MfpCard>
-            ))}
+            <MfpCard key={item.id}>
+              <Pressable onPress={() => router.push(`/library/recipe/${item.id}` as never)} accessibilityRole="button">
+                <Text style={styles.name}>{item.name}</Text>
+                <Text style={styles.meta}>{item.totalServings} servings · {item.ingredients.length} ingredients</Text>
+              </Pressable>
+            </MfpCard>
+          ))}
     </ScrollView>
   );
 }

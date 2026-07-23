@@ -2,13 +2,18 @@ import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Link, Redirect } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
-import { Field, PrimaryButton, MfpCard, SectionTitle } from '@/src/components/ui';
+import { Field, PrimaryButton, MfpButton, MfpCard, SectionTitle } from '@/src/components/ui';
 import { theme } from '@/src/theme';
 import { useApp } from '@/src/context/AppContext';
 
+const GUEST_LOGIN_ENABLED =
+  typeof __DEV__ !== 'undefined' && __DEV__
+    ? true
+    : process.env.EXPO_PUBLIC_ENABLE_GUEST_LOGIN === 'true';
+
 export default function LoginScreen() {
   const { t } = useApp();
-  const { signIn, session, loading, configured } = useAuth();
+  const { signIn, signInGuest, session, loading, configured } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -20,6 +25,14 @@ export default function LoginScreen() {
     setBusy(true);
     setError('');
     const result = await signIn(email, password);
+    if (!result.ok) setError(result.message);
+    setBusy(false);
+  };
+
+  const onGuest = async () => {
+    setBusy(true);
+    setError('');
+    const result = await signInGuest();
     if (!result.ok) setError(result.message);
     setBusy(false);
   };
@@ -39,6 +52,14 @@ export default function LoginScreen() {
         />
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <PrimaryButton label={busy ? t('common.loading') : t('auth.login')} onPress={onSubmit} />
+        {GUEST_LOGIN_ENABLED ? (
+          <MfpButton
+            label={busy ? t('common.loading') : t('auth.guestLogin')}
+            onPress={onGuest}
+            disabled={busy || !configured}
+            variant="outline"
+          />
+        ) : null}
         <Link href="/(auth)/register" style={styles.link}>
           {t('auth.needAccount')}
         </Link>

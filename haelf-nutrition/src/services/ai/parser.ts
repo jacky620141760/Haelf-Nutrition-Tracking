@@ -3,32 +3,63 @@ import { validateFoodDraft } from '../../domain/validation';
 
 export type ParseResult =
   | { ok: true; suggestion: AiSuggestion }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: 'not_food' };
 
-function stripCodeFence(text: string): string | null {
+/** Pull a JSON object out of model output (fences, prose, trailing text). */
+export function extractJsonObject(text: string): string | null {
   const trimmed = text.trim();
-  // Reject if markdown fences or extra prose — only accept pure JSON object OR extract if ONLY fence wrapper
-  if (trimmed.startsWith('```')) {
-    return null;
+  if (!trimmed) return null;
+
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) {
+    const inner = fence[1].trim();
+    if (inner.startsWith('{') && inner.endsWith('}')) return inner;
   }
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
-    return null;
+
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) return trimmed;
+
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    return trimmed.slice(start, end + 1);
   }
-  return trimmed;
+  return null;
 }
 
 function isBasis(v: unknown): v is NutritionBasis {
-  return v === 'PER_100_G' || v === 'PER_SERVING';
+  if (v === 'PER_100_G' || v === 'PER_SERVING') return true;
+  if (typeof v !== 'string') return false;
+  const n = v.trim().toUpperCase().replace(/-/g, '_');
+  return n === 'PER_100_G' || n === 'PER_SERVING';
 }
 
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v);
+function toFiniteNumber(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v.trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function normalizeBasis(v: unknown): NutritionBasis | null {
+  if (!isBasis(v)) return null;
+  if (v === 'PER_100_G' || v === 'PER_SERVING') return v;
+  const n = String(v).trim().toUpperCase().replace(/-/g, '_');
+  return n === 'PER_100_G' ? 'PER_100_G' : 'PER_SERVING';
+}
+
+function pick(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (key in record && record[key] != null) return record[key];
+  }
+  return undefined;
 }
 
 export function parseAiResponse(raw: string): ParseResult {
-  const jsonText = stripCodeFence(raw);
+  const jsonText = extractJsonObject(raw);
   if (!jsonText) {
-    return { ok: false, error: 'AI 回應格式無效：需為單一 JSON 物件且不含額外文字' };
+    return { ok: false, error: 'AI 回應格式無效：找不到 JSON 物件' };
   }
   let obj: unknown;
   try {
@@ -40,47 +71,49 @@ export function parseAiResponse(raw: string): ParseResult {
     return { ok: false, error: 'AI 回應格式無效：需為單一物件' };
   }
   const record = obj as Record<string, unknown>;
-  const allowed = new Set([
-    'name',
-    'basis',
-    'quantity',
-    'kcal',
-    'protein_g',
-    'fat_g',
-    'carbs_g',
-    'confidence',
-  ]);
-  for (const key of Object.keys(record)) {
-    if (!allowed.has(key)) {
-      return { ok: false, error: `AI 回應格式無效：未知欄位 ${key}` };
-    }
+
+  const isFoodRaw = pick(record, ['is_food', 'isFood', 'food']);
+  if (isFoodRaw === false || isFoodRaw === 0 || isFoodRaw === 'false' || isFoodRaw === 'no') {
+    const reasonRaw = pick(record, ['reason', 'error', 'message', 'detail']);
+    const reason =
+      typeof reasonRaw === 'string' && reasonRaw.trim()
+        ? reasonRaw.trim()
+        : '圖片或描述不是可分析的食物';
+    return { ok: false, code: 'not_food', error: reason };
   }
-  const required = [...allowed];
-  for (const key of required) {
-    if (!(key in record)) {
-      return { ok: false, error: `AI 回應格式無效：缺少欄位 ${key}` };
-    }
-  }
-  if (typeof record.name !== 'string') {
+
+  const nameRaw = pick(record, ['name', 'food_name', 'foodName', 'dish']);
+  const basis = normalizeBasis(pick(record, ['basis', 'nutrition_basis']));
+  const quantity = toFiniteNumber(pick(record, ['quantity', 'amount', 'serving']));
+  const kcal = toFiniteNumber(pick(record, ['kcal', 'calories', 'energy_kcal']));
+  const protein_g = toFiniteNumber(pick(record, ['protein_g', 'protein', 'proteins']));
+  const fat_g = toFiniteNumber(pick(record, ['fat_g', 'fat', 'fats']));
+  const carbs_g = toFiniteNumber(
+    pick(record, ['carbs_g', 'carbohydrates', 'carbs', 'carbohydrate_g'])
+  );
+  let confidence = toFiniteNumber(pick(record, ['confidence', 'score']));
+
+  if (typeof nameRaw !== 'string' || !nameRaw.trim()) {
     return { ok: false, error: 'AI 回應格式無效：name' };
   }
-  if (!isBasis(record.basis)) {
-    return { ok: false, error: 'AI 回應格式無效：basis' };
+  if (!basis) {
+    return { ok: false, error: 'AI 回應格式無效：basis（需為 PER_100_G 或 PER_SERVING）' };
   }
-  for (const k of ['quantity', 'kcal', 'protein_g', 'fat_g', 'carbs_g', 'confidence'] as const) {
-    if (!isFiniteNumber(record[k])) {
-      return { ok: false, error: `AI 回應格式無效：${k}` };
-    }
+  if (quantity === null || kcal === null || protein_g === null || fat_g === null || carbs_g === null) {
+    return { ok: false, error: 'AI 回應格式無效：缺少有效營養數字' };
   }
+  if (confidence === null) confidence = 0.7;
+  if (confidence > 1 && confidence <= 100) confidence = confidence / 100;
+
   const suggestion: AiSuggestion = {
-    name: record.name,
-    basis: record.basis,
-    quantity: record.quantity as number,
-    kcal: record.kcal as number,
-    protein_g: record.protein_g as number,
-    fat_g: record.fat_g as number,
-    carbs_g: record.carbs_g as number,
-    confidence: record.confidence as number,
+    name: nameRaw.trim(),
+    basis,
+    quantity,
+    kcal,
+    protein_g,
+    fat_g,
+    carbs_g,
+    confidence,
   };
   const errors = validateFoodDraft({
     name: suggestion.name,
@@ -93,9 +126,6 @@ export function parseAiResponse(raw: string): ParseResult {
   });
   if (errors.length) {
     return { ok: false, error: `AI 數值不符需求：${errors.map((e) => e.field).join(', ')}` };
-  }
-  if (suggestion.confidence < 0 || suggestion.confidence > 1) {
-    // allow 0-100 as well? Spec says finite decimal; keep 0-1 preferred but accept if finite from validate
   }
   return { ok: true, suggestion };
 }
