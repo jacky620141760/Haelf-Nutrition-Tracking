@@ -21,13 +21,12 @@ type Goals = {
 type Props = {
   consumed: Nutrients;
   goal: Goals;
-  exerciseKcal?: number;
 };
 
-export function DailyNutritionHero({ consumed, goal, exerciseKcal = 0 }: Props) {
+export function DailyNutritionHero({ consumed, goal }: Props) {
   const { t } = useApp();
   const hasGoal = goal != null && goal.kcal > 0;
-  const calorieBudget = hasGoal ? goal!.kcal + exerciseKcal : null;
+  const calorieBudget = hasGoal ? goal!.kcal : null;
   const progress = nutrientProgress(consumed.kcal, calorieBudget);
   const semantic = calorieRingSemantic(progress, hasGoal);
   const ringColor = calorieRingColor(semantic);

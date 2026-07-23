@@ -21,6 +21,7 @@ export function buildDailySummary(input: {
   goal: DailyGoalVersion | null;
   waterGoal: WaterGoalVersion | null;
   diaryStatus: DailyDiaryStatus | null;
+  /** @deprecated No longer affects remaining; kept for call-site compatibility. */
   exerciseCaloriesEnabled?: boolean;
 }): DailySummary {
   const food = sumNutrients(
@@ -32,14 +33,12 @@ export function buildDailySummary(input: {
     }))
   );
   const exerciseKcal = totalExerciseKcal(input.exerciseEntries);
-  const budgetExercise = input.exerciseCaloriesEnabled === false ? 0 : exerciseKcal;
   return {
     localDate: input.localDate,
     food,
     exerciseKcal,
-    remainingKcal: input.goal
-      ? input.goal.kcal - food.kcal + budgetExercise
-      : null,
+    // Daily goal remaining is food-only; exercise/steps are tracked separately.
+    remainingKcal: input.goal ? input.goal.kcal - food.kcal : null,
     waterMl: input.waterEntries.reduce((total, entry) => total + entry.ml, 0),
     waterGoalMl: input.waterGoal?.ml ?? null,
     steps: input.stepTotal?.steps ?? null,

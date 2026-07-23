@@ -132,7 +132,6 @@ export default function DiaryScreen() {
         <DailyNutritionHero
           consumed={summary?.food ?? { kcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0 }}
           goal={goal}
-          exerciseKcal={summary?.exerciseKcal ?? 0}
         />
 
         {deficit ? (

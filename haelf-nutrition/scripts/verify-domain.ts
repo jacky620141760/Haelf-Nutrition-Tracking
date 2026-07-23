@@ -252,7 +252,7 @@ const summary = buildDailySummary({
   waterGoal: { id: 1, effectiveDate: '2026-01-01', ml: 2000, createdAt: '', updatedAt: '' },
   diaryStatus: null,
 });
-assert(summary.remainingKcal === 600, 'remaining = goal - food + exercise');
+assert(summary.remainingKcal === 300, 'remaining = goal - food (exercise ignored)');
 assert(summary.waterMl === 1250 && summary.steps === 8000, 'daily summary habits');
 assertClose(waterToMl(1, 'cup'), 236.588, 'cup to ml');
 assertClose(mlToWater(29.5735, 'oz'), 1, 'ml to ounce');
