@@ -247,19 +247,3 @@ Contributions are welcome.
 
 For visible UI changes, include screenshots using sample data only. For schema changes, include a forward migration and explain compatibility with existing local and cloud data.
 
-## Open-source release checklist
-
-Maintainers should complete these checks before making a repository public:
-
-- [ ] Confirm no real values exist in `.env.example` or `.env.vm.example`.
-- [ ] Scan the current tree and Git history for secrets and personal data.
-- [ ] Rotate any credential that may have been committed previously.
-- [ ] Review Supabase row-level security policies and the unauthenticated Edge Function.
-- [ ] Run all validation commands.
-- [ ] Confirm the copyright holder and license choice.
-- [ ] Add repository contact and security-reporting details.
-- [ ] Add CI, linting, and broader automated tests when available.
-
-## License
-
-This project is available under the [MIT License](LICENSE). Third-party packages and services remain subject to their own licenses and terms.
