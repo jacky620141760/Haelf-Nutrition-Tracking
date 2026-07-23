@@ -45,7 +45,7 @@ function Gate({ children }: { children: React.ReactNode }) {
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { loading, session, needsGoalsSetup, needsAiSetup, needsStepsSetup } = useAuth();
-  const segments = useSegments();
+  const segments = useSegments() as string[];
   const inAuth = segments[0] === '(auth)';
   const screen = segments[1];
   const onboardingScreens = new Set(['setup-goals', 'setup-ai', 'setup-steps']);
