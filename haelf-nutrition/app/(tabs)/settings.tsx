@@ -23,7 +23,7 @@ function Row({ label, onPress, hint }: { label: string; onPress: () => void; hin
 export default function MoreScreen() {
   const router = useRouter();
   const { isWeb, preferences, updatePreferences, t } = useApp();
-  const { user, signOutUser, lastSyncError } = useAuth();
+  const { user, signOutUser, lastSyncError, syncNow } = useAuth();
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -38,6 +38,8 @@ export default function MoreScreen() {
         <Text style={styles.accountLabel}>{t('auth.account')}</Text>
         <Text style={styles.accountEmail}>{user?.email ?? t('common.unknown')}</Text>
         {lastSyncError ? <Text style={styles.syncError}>{lastSyncError}</Text> : null}
+        <PrimaryButton label={t('auth.syncNow')} onPress={() => void syncNow()} />
+        <View style={{ height: theme.space.sm }} />
         <PrimaryButton
           label={t('auth.signOut')}
           danger

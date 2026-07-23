@@ -71,7 +71,11 @@ export async function signInWithEmail(email: string, password: string): Promise<
   return { ok: true, user: data.user, session: data.session };
 }
 
-/** Temporary test helper: new identity each call so onboarding can restart from scratch. */
+/** Fixed shared guest account — avoids signUp email rate limits. Local wipe still resets onboarding. */
+const GUEST_EMAIL = 'haelf.guest@example.com';
+const GUEST_PASSWORD = 'HaelfGuestTest1!';
+
+/** Temporary test helper. Prefers anonymous; else fixed guest password login (no new emails). */
 export async function signInAsGuest(): Promise<AuthResult> {
   if (!isSupabaseConfigured()) {
     return { ok: false, message: 'Supabase is not configured. Set EXPO_PUBLIC_SUPABASE_URL and ANON_KEY.' };
@@ -84,16 +88,40 @@ export async function signInAsGuest(): Promise<AuthResult> {
     return { ok: true, user: anonymous.data.user, session: anonymous.data.session };
   }
 
-  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const email = `guest-${stamp}@haelf.guest`;
-  const password = `Guest-${stamp}-Aa1`;
-  const { data, error } = await supabase.auth.signUp({ email, password });
-  if (error) {
-    const anonHint = anonymous.error?.message ? ` (anonymous: ${anonymous.error.message})` : '';
-    return { ok: false, message: `${error.message}${anonHint}` };
+  const existing = await supabase.auth.signInWithPassword({
+    email: GUEST_EMAIL,
+    password: GUEST_PASSWORD,
+  });
+  if (!existing.error && existing.data.user) {
+    return { ok: true, user: existing.data.user, session: existing.data.session };
   }
-  if (!data.user) return { ok: false, message: 'Guest sign-in failed' };
-  return { ok: true, user: data.user, session: data.session };
+
+  // First-time only: create the shared guest user (one signup, not per tap).
+  const created = await supabase.auth.signUp({
+    email: GUEST_EMAIL,
+    password: GUEST_PASSWORD,
+  });
+  if (!created.error && created.data.user) {
+    // If email confirm is on and session is null, try password sign-in anyway.
+    if (created.data.session) {
+      return { ok: true, user: created.data.user, session: created.data.session };
+    }
+    const afterCreate = await supabase.auth.signInWithPassword({
+      email: GUEST_EMAIL,
+      password: GUEST_PASSWORD,
+    });
+    if (!afterCreate.error && afterCreate.data.user) {
+      return { ok: true, user: afterCreate.data.user, session: afterCreate.data.session };
+    }
+  }
+
+  const parts = [
+    existing.error?.message,
+    created.error?.message,
+    anonymous.error?.message ? `anonymous: ${anonymous.error.message}` : null,
+    'Tip: enable Anonymous sign-ins in Supabase Auth, or wait out email rate limit then tap guest once to create haelf.guest@example.com',
+  ].filter(Boolean);
+  return { ok: false, message: parts.join(' | ') };
 }
 
 export async function signOut(): Promise<void> {

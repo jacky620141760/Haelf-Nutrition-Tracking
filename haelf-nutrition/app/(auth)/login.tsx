@@ -19,7 +19,7 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  if (!loading && session) return <Redirect href="/(tabs)" />;
+  if (!loading && session) return <Redirect href="/" />;
 
   const onSubmit = async () => {
     setBusy(true);

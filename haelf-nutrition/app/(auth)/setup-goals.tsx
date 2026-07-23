@@ -84,7 +84,7 @@ export default function SetupGoalsScreen() {
   if (!needsGoalsSetup) {
     if (needsAiSetup) return <Redirect href="/(auth)/setup-ai" />;
     if (needsStepsSetup) return <Redirect href="/(auth)/setup-steps" />;
-    return <Redirect href="/(tabs)" />;
+    return <Redirect href="/" />;
   }
 
   const runCalculate = (): NutritionSuggestion | null => {

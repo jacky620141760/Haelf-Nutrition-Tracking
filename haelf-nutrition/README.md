@@ -47,3 +47,4 @@ Specs and UI copy are primarily Traditional Chinese (`requirements.md`, i18n). R
 
 - [requirements.md](./requirements.md) — product requirements  
 - [AGENTS.md](./AGENTS.md) — Expo version pin for agents  
+- [TEMP_GUEST_LOGIN.md](./TEMP_GUEST_LOGIN.md) — **temporary** guest login; delete feature + this file after testing  

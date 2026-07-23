@@ -62,7 +62,7 @@ export function parseBodyPlanForm(
   const currentWeightKg = parseFiniteNumber(form.currentWeight);
   const targetWeightKg = parseFiniteNumber(form.targetWeight);
   const planWeeks = parseFiniteNumber(form.planWeeks);
-  const manualTdee = parseFiniteNumber(form.tdeeKcal);
+  const manualBmr = parseFiniteNumber(form.tdeeKcal);
 
   if (ageYears == null || ageYears < 10 || ageYears > 120) errors.age = rangeMsg;
   if (heightCm == null || heightCm < 100 || heightCm > 250) errors.height = rangeMsg;
@@ -73,7 +73,8 @@ export function parseBodyPlanForm(
     errors.targetWeight = rangeMsg;
   }
   if (planWeeks == null || planWeeks < 1 || planWeeks > 104) errors.planWeeks = rangeMsg;
-  if (form.tdeeMode === 'manual' && (manualTdee == null || manualTdee < 800 || manualTdee > 6000)) {
+  // Manual field is BMR (basal), not TDEE.
+  if (form.tdeeMode === 'manual' && (manualBmr == null || manualBmr < 600 || manualBmr > 4000)) {
     errors.tdeeKcal = rangeMsg;
   }
 
@@ -90,7 +91,7 @@ export function parseBodyPlanForm(
     targetWeightKg: targetWeightKg!,
     planWeeks: planWeeks!,
     tdeeMode: form.tdeeMode,
-    tdeeKcal: form.tdeeMode === 'manual' ? manualTdee : null,
+    tdeeKcal: form.tdeeMode === 'manual' ? manualBmr : null,
   });
 
   return {
@@ -105,7 +106,8 @@ export function parseBodyPlanForm(
       targetWeightKg: targetWeightKg!,
       planWeeks: planWeeks!,
       tdeeMode: form.tdeeMode,
-      tdeeKcal: form.tdeeMode === 'manual' ? manualTdee! : suggestion.tdee,
+      // Persist manual BMR only; auto leaves null so TDEE recomputes from metrics.
+      tdeeKcal: form.tdeeMode === 'manual' ? manualBmr! : null,
     },
   };
 }

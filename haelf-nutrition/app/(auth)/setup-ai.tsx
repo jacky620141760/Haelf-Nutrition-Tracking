@@ -38,7 +38,8 @@ export default function SetupAiScreen() {
   const goNext = async () => {
     await finishAiOnboarding();
     if (await isStepsOnboardingPending()) router.replace('/(auth)/setup-steps');
-    else router.replace('/(tabs)');
+    // Leave the (auth) stack via root href — `/(tabs)` is not a child of (auth).
+    else router.replace('/');
   };
 
   const onSave = async () => {

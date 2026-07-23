@@ -343,7 +343,48 @@ export function CalorieTrendChart({
 }
 
 const WEIGHT_MARKER_R = 3.5;
-const WEIGHT_PLOT = { left: 44, right: 14, top: 14, bottom: 28 };
+const WEIGHT_PLOT = { left: 44, right: 18, top: 14, bottom: 28 };
+
+function formatWeightAxisDate(label: string): string {
+  // YYYY-MM-DD → MM/DD
+  return label.slice(5).replace('-', '/');
+}
+
+/** Only first & last calendar dates — avoids crowding and right-edge clipping. */
+function WeightDailyXLabels({
+  points,
+  margin,
+}: {
+  points: TrendPoint[];
+  margin: typeof WEIGHT_PLOT;
+}) {
+  if (!points.length) return null;
+  const last = points.length - 1;
+  return (
+    <>
+      <SvgText
+        x={xAt(0, points.length, margin)}
+        y={HEIGHT - 4}
+        fontSize="9"
+        fill={theme.colors.textMuted}
+        textAnchor="start"
+      >
+        {formatWeightAxisDate(points[0].label)}
+      </SvgText>
+      {last > 0 ? (
+        <SvgText
+          x={xAt(last, points.length, margin)}
+          y={HEIGHT - 4}
+          fontSize="9"
+          fill={theme.colors.textMuted}
+          textAnchor="end"
+        >
+          {formatWeightAxisDate(points[last].label)}
+        </SvgText>
+      ) : null}
+    </>
+  );
+}
 
 /** Daily weight line chart (e.g. 30 days). */
 export function WeightDailyChart({
@@ -424,7 +465,7 @@ export function WeightDailyChart({
             ) : null
           )}
         </G>
-        <XLabels points={points} maxLabels={6} />
+        <WeightDailyXLabels points={points} margin={WEIGHT_PLOT} />
       </Svg>
       <Text style={styles.legend}>● 當日最後體重（橫軸為 30 日曆日）</Text>
     </View>

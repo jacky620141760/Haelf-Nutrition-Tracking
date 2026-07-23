@@ -2,6 +2,7 @@
 
 export type BiologicalSex = 'male' | 'female';
 export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active';
+/** auto = estimate BMR from body metrics; manual = user-entered BMR (stored in tdeeKcal). */
 export type TdeeMode = 'auto' | 'manual';
 
 export type BodyPlanInput = {
@@ -13,7 +14,7 @@ export type BodyPlanInput = {
   targetWeightKg: number;
   planWeeks: number;
   tdeeMode: TdeeMode;
-  /** Used when tdeeMode is manual. */
+  /** Manual basal metabolic rate (BMR) when tdeeMode is manual. Column name remains tdee_kcal. */
   tdeeKcal?: number | null;
 };
 
@@ -59,7 +60,39 @@ export function calculateTdee(bmr: number, activity: ActivityLevel): number {
   return Math.round(bmr * ACTIVITY_MULT[activity]);
 }
 
-/** Prefer saved TDEE; otherwise recompute from body metrics when complete. */
+function resolveBmr(plan: {
+  tdeeMode: TdeeMode;
+  tdeeKcal: number | null;
+  sex: BiologicalSex | null;
+  ageYears: number | null;
+  heightCm: number | null;
+  currentWeightKg: number | null;
+}): number | null {
+  if (
+    plan.tdeeMode === 'manual' &&
+    typeof plan.tdeeKcal === 'number' &&
+    Number.isFinite(plan.tdeeKcal) &&
+    plan.tdeeKcal > 0
+  ) {
+    return Math.round(plan.tdeeKcal);
+  }
+  if (
+    plan.sex &&
+    plan.ageYears != null &&
+    plan.heightCm != null &&
+    plan.currentWeightKg != null
+  ) {
+    return calculateBmr({
+      sex: plan.sex,
+      weightKg: plan.currentWeightKg,
+      heightCm: plan.heightCm,
+      ageYears: plan.ageYears,
+    });
+  }
+  return null;
+}
+
+/** TDEE = BMR × activity. Manual mode uses user BMR; auto estimates BMR from metrics. */
 export function resolveEffectiveTdee(plan: {
   tdeeMode: TdeeMode;
   tdeeKcal: number | null;
@@ -69,25 +102,10 @@ export function resolveEffectiveTdee(plan: {
   activityLevel: ActivityLevel | null;
   currentWeightKg: number | null;
 }): number | null {
-  if (typeof plan.tdeeKcal === 'number' && Number.isFinite(plan.tdeeKcal) && plan.tdeeKcal > 0) {
-    return Math.round(plan.tdeeKcal);
-  }
-  if (
-    plan.sex &&
-    plan.ageYears != null &&
-    plan.heightCm != null &&
-    plan.activityLevel &&
-    plan.currentWeightKg != null
-  ) {
-    const bmr = calculateBmr({
-      sex: plan.sex,
-      weightKg: plan.currentWeightKg,
-      heightCm: plan.heightCm,
-      ageYears: plan.ageYears,
-    });
-    return calculateTdee(bmr, plan.activityLevel);
-  }
-  return null;
+  if (!plan.activityLevel) return null;
+  const bmr = resolveBmr(plan);
+  if (bmr == null) return null;
+  return calculateTdee(bmr, plan.activityLevel);
 }
 
 /**
@@ -117,20 +135,20 @@ function roundMacro(n: number): number {
  * Protein ~2.0 g/kg current weight; fat ~0.8 g/kg; carbs fill remaining kcal.
  */
 export function suggestNutritionPlan(input: BodyPlanInput): NutritionSuggestion {
-  const bmr = calculateBmr({
+  const autoBmr = calculateBmr({
     sex: input.sex,
     weightKg: input.currentWeightKg,
     heightCm: input.heightCm,
     ageYears: input.ageYears,
   });
-  const autoTdee = calculateTdee(bmr, input.activityLevel);
-  const tdee =
+  const bmr =
     input.tdeeMode === 'manual' &&
     typeof input.tdeeKcal === 'number' &&
     Number.isFinite(input.tdeeKcal) &&
     input.tdeeKcal > 0
       ? Math.round(input.tdeeKcal)
-      : autoTdee;
+      : autoBmr;
+  const tdee = calculateTdee(bmr, input.activityLevel);
 
   const days = Math.max(1, input.planWeeks * 7);
   const deltaKg = input.currentWeightKg - input.targetWeightKg;

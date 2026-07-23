@@ -1,4 +1,7 @@
+import { useRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
+import { Ionicons } from '@expo/vector-icons';
 import type { FoodEntry, MealType } from '@/src/domain/types';
 import { displayKcal, sumNutrients } from '@/src/domain/nutrition';
 import { theme } from '@/src/theme';
@@ -14,24 +17,47 @@ export function FoodRow({
   onDelete: () => void;
 }) {
   const { t } = useApp();
+  const swipeRef = useRef<Swipeable>(null);
   const kcal = displayKcal(entry.snapKcal);
-  return (
+
+  const renderRightActions = () => (
     <Pressable
-      onPress={onPress}
-      onLongPress={onDelete}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      onPress={() => {
+        swipeRef.current?.close();
+        onDelete();
+      }}
+      style={styles.deleteAction}
       accessibilityRole="button"
-      accessibilityLabel={`${entry.name} ${kcal} kcal`}
-      accessibilityHint={t('accessibility.editFoodHint')}
+      accessibilityLabel={t('common.delete')}
     >
-      <View style={styles.rowMain}>
-        <Text style={styles.foodName} numberOfLines={1}>
-          {entry.name}
-        </Text>
-      </View>
-      <Text style={styles.kcal}>{kcal}</Text>
-      <Text style={styles.chevron}>›</Text>
+      <Ionicons name="trash-outline" size={22} color="#fff" />
     </Pressable>
+  );
+
+  return (
+    <Swipeable
+      ref={swipeRef}
+      friction={2}
+      overshootRight={false}
+      rightThreshold={40}
+      renderRightActions={renderRightActions}
+    >
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+        accessibilityRole="button"
+        accessibilityLabel={`${entry.name} ${kcal} kcal`}
+        accessibilityHint={t('accessibility.editFoodHint')}
+      >
+        <View style={styles.rowMain}>
+          <Text style={styles.foodName} numberOfLines={1}>
+            {entry.name}
+          </Text>
+        </View>
+        <Text style={styles.kcal}>{kcal}</Text>
+        <Text style={styles.chevron}>›</Text>
+      </Pressable>
+    </Swipeable>
   );
 }
 
@@ -65,11 +91,18 @@ export function MealSection({
   return (
     <View style={styles.section}>
       <View style={styles.header}>
-        <Text style={styles.mealTitle} accessibilityRole="header">{t(`meal.${meal}`)}</Text>
+        <Text style={styles.mealTitle} accessibilityRole="header">
+          {t(`meal.${meal}`)}
+        </Text>
         <View style={styles.headerActions}>
           <Text style={styles.mealTotal}>{mealTotal}</Text>
           {onMenu ? (
-            <Pressable onPress={onMenu} style={styles.menu} accessibilityRole="button" accessibilityLabel={t('accessibility.mealActions')}>
+            <Pressable
+              onPress={onMenu}
+              style={styles.menu}
+              accessibilityRole="button"
+              accessibilityLabel={t('accessibility.mealActions')}
+            >
               <Text style={styles.menuText}>•••</Text>
             </Pressable>
           ) : null}
@@ -122,7 +155,12 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.sm },
-  menu: { minWidth: theme.minTouch, minHeight: theme.minTouch, alignItems: 'center', justifyContent: 'center' },
+  menu: {
+    minWidth: theme.minTouch,
+    minHeight: theme.minTouch,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   menuText: { color: theme.colors.textMuted, fontWeight: '800' },
   addRow: {
     minHeight: 56,
@@ -170,5 +208,12 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: theme.colors.textMute,
     marginLeft: 4,
+  },
+  deleteAction: {
+    width: 72,
+    minHeight: 64,
+    backgroundColor: theme.colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

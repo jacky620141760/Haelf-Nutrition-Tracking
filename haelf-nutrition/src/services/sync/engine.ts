@@ -260,35 +260,41 @@ async function pushAppPreferences(userId: string): Promise<void> {
   if (error) throw new Error(`app_preferences push failed: ${error.message}`);
 }
 
-async function pushDailyGoalVersions(userId: string): Promise<void> {
-  await ensureCloudIds('daily_goal_versions');
-  const rows = await getDb().getAllAsync<Record<string, unknown>>(
-    `SELECT * FROM daily_goal_versions`
-  );
+async function pushByUserDateKey(
+  table: SyncableTable,
+  userId: string,
+  dateColumn: 'effective_date' | 'local_date',
+  onConflict: 'user_id,effective_date' | 'user_id,local_date'
+): Promise<void> {
+  await ensureCloudIds(table);
+  const rows = await getDb().getAllAsync<Record<string, unknown>>(`SELECT * FROM ${table}`);
   if (!rows.length) return;
 
   for (const row of rows) {
-    const effectiveDate = String(row.effective_date);
+    const dateValue = String(row[dateColumn]);
     const { data: remote, error: fetchError } = await supabase
-      .from('daily_goal_versions')
+      .from(table)
       .select('id')
       .eq('user_id', userId)
-      .eq('effective_date', effectiveDate)
+      .eq(dateColumn, dateValue)
       .maybeSingle();
-    if (fetchError) throw new Error(`daily_goal_versions push failed: ${fetchError.message}`);
+    if (fetchError) throw new Error(`${table} push failed: ${fetchError.message}`);
 
     const canonicalId = remote?.id ?? String(row.cloud_id ?? newCloudId());
     if (row.cloud_id !== canonicalId) {
-      await run(`UPDATE daily_goal_versions SET cloud_id = ? WHERE id = ?`, p(canonicalId, row.id));
+      // daily_step_totals / daily_diary_status are keyed by local_date, not id.
+      if (dateColumn === 'local_date') {
+        await run(`UPDATE ${table} SET cloud_id = ? WHERE local_date = ?`, p(canonicalId, dateValue));
+      } else {
+        await run(`UPDATE ${table} SET cloud_id = ? WHERE id = ?`, p(canonicalId, row.id));
+      }
       row.cloud_id = canonicalId;
     }
 
-    const payload = toRemoteRow('daily_goal_versions', row, userId);
+    const payload = toRemoteRow(table, row, userId);
     payload.id = canonicalId;
-    const { error } = await supabase.from('daily_goal_versions').upsert(payload, {
-      onConflict: 'user_id,effective_date',
-    });
-    if (error) throw new Error(`daily_goal_versions push failed: ${error.message}`);
+    const { error } = await supabase.from(table).upsert(payload, { onConflict });
+    if (error) throw new Error(`${table} push failed: ${error.message}`);
   }
 }
 
@@ -297,8 +303,12 @@ async function pushTable(table: SyncableTable, userId: string): Promise<void> {
     await pushAppPreferences(userId);
     return;
   }
-  if (table === 'daily_goal_versions') {
-    await pushDailyGoalVersions(userId);
+  if (table === 'daily_goal_versions' || table === 'water_goal_versions') {
+    await pushByUserDateKey(table, userId, 'effective_date', 'user_id,effective_date');
+    return;
+  }
+  if (table === 'daily_step_totals' || table === 'daily_diary_status') {
+    await pushByUserDateKey(table, userId, 'local_date', 'user_id,local_date');
     return;
   }
   await ensureCloudIds(table);
@@ -708,17 +718,34 @@ async function performFullSync(userId: string): Promise<SyncResult> {
       await prepareAccountForSync(userId);
       const since = await getSyncMeta('last_pull_at');
       const pullSince = effectivePullSince(since);
+      // After account wipe / first bind there is no watermark: pull cloud first so a
+      // later push failure cannot leave the device empty with data still in cloud.
+      const initialRestore = !since;
+
+      if (initialRestore) {
+        let watermark: string | null = null;
+        for (const table of TABLES) {
+          watermark = await pullTable(table, userId, null, watermark);
+        }
+        await setSyncMeta(
+          'last_pull_at',
+          watermark ?? new Date().toISOString()
+        );
+      }
+
       for (const table of TABLES) await pushTable(table, userId);
       await drainOutbox();
-      let watermark: string | null = since;
-      for (const table of TABLES) {
-        watermark = await pullTable(table, userId, pullSince, watermark);
+
+      if (!initialRestore) {
+        let watermark: string | null = since;
+        for (const table of TABLES) {
+          watermark = await pullTable(table, userId, pullSince, watermark);
+        }
+        if (watermark && watermark !== since) {
+          await setSyncMeta('last_pull_at', watermark);
+        }
       }
-      if (watermark && watermark !== since) {
-        await setSyncMeta('last_pull_at', watermark);
-      } else if (!since) {
-        await setSyncMeta('last_pull_at', watermark ?? new Date().toISOString());
-      }
+
       await setSyncMeta('bound_user_id', userId);
       lastResult = { ok: true };
     } catch (error) {

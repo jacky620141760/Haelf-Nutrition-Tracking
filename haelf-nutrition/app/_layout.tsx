@@ -1,7 +1,9 @@
+import 'react-native-gesture-handler';
 import { Stack, Redirect, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
@@ -91,7 +93,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     inAuth &&
     (screen === 'login' || screen === 'register')
   ) {
-    return <Redirect href="/(tabs)" />;
+    return <Redirect href="/" />;
   }
 
   // Keep users inside onboarding screens while flags are active; allow auth screens when logged out.
@@ -141,22 +143,25 @@ function AppStack() {
 
 export default function RootLayout() {
   return (
-    <SafeAreaProvider>
-      <AppProvider>
-        <WebPreviewBanner />
-        <Gate>
-          <AuthProvider>
-            <AuthGate>
-              <AppStack />
-            </AuthGate>
-          </AuthProvider>
-        </Gate>
-      </AppProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaProvider>
+        <AppProvider>
+          <WebPreviewBanner />
+          <Gate>
+            <AuthProvider>
+              <AuthGate>
+                <AppStack />
+              </AuthGate>
+            </AuthProvider>
+          </Gate>
+        </AppProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   center: {
     flex: 1,
     alignItems: 'center',

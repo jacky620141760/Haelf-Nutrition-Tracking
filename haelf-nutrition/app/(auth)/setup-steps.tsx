@@ -24,12 +24,13 @@ export default function SetupStepsScreen() {
   if (!session) return <Redirect href="/(auth)/login" />;
   if (needsGoalsSetup) return <Redirect href="/(auth)/setup-goals" />;
   if (needsAiSetup) return <Redirect href="/(auth)/setup-ai" />;
-  if (!needsStepsSetup) return <Redirect href="/(tabs)" />;
+  if (!needsStepsSetup) return <Redirect href="/" />;
 
   const finish = async () => {
     await finishStepsOnboarding();
     bumpRefresh();
-    router.replace('/(tabs)');
+    // Leave the (auth) stack via root href — `/(tabs)` is not a child of (auth).
+    router.replace('/');
   };
 
   const connectPedometer = async () => {

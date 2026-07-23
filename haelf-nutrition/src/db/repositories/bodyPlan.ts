@@ -15,6 +15,7 @@ export type BodyPlan = {
   targetWeightKg: number | null;
   planWeeks: number | null;
   tdeeMode: TdeeMode;
+  /** Manual BMR when tdeeMode is 'manual'; null in auto (TDEE = BMR × activity). */
   tdeeKcal: number | null;
   updatedAt: string;
 };
