@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
-import { displayKcal } from '@/src/domain/nutrition';
+import { displayKcal, displayMacroG } from '@/src/domain/nutrition';
 import {
   calorieRingColor,
   calorieRingSemantic,
@@ -7,11 +7,16 @@ import {
   remainingKcal,
 } from '@/src/domain/progress';
 import type { Nutrients } from '@/src/domain/types';
-import { zhTW } from '@/src/i18n/zh-TW';
+import { useApp } from '@/src/context/AppContext';
 import { theme } from '@/src/theme';
-import { ProgressRing } from './ProgressRing';
+import { MacroMiniRing, ProgressRing } from './ProgressRing';
 
-type Goals = { kcal: number } | null;
+type Goals = {
+  kcal: number;
+  proteinG: number;
+  fatG: number;
+  carbsG: number;
+} | null;
 
 type Props = {
   consumed: Nutrients;
@@ -20,6 +25,7 @@ type Props = {
 };
 
 export function DailyNutritionHero({ consumed, goal, exerciseKcal = 0 }: Props) {
+  const { t } = useApp();
   const hasGoal = goal != null && goal.kcal > 0;
   const calorieBudget = hasGoal ? goal!.kcal + exerciseKcal : null;
   const progress = nutrientProgress(consumed.kcal, calorieBudget);
@@ -31,17 +37,22 @@ export function DailyNutritionHero({ consumed, goal, exerciseKcal = 0 }: Props) 
     remaining == null
       ? displayKcal(consumed.kcal)
       : displayKcal(Math.abs(remaining));
-  const centerLabel = remaining == null ? zhTW.diary.food : over ? zhTW.diary.over : zhTW.diary.remainingLabel;
+  const centerLabel =
+    remaining == null
+      ? t('diary.food')
+      : over
+        ? t('diary.over')
+        : t('diary.remainingLabel');
 
   const foodKcal = displayKcal(consumed.kcal);
   const goalKcal = hasGoal ? displayKcal(goal!.kcal) : null;
 
   const a11y =
     remaining == null
-      ? `已攝取 ${foodKcal} 千卡，目標尚未設定`
+      ? `${t('diary.food')} ${foodKcal} kcal`
       : over
-        ? `超出 ${centerValue} 千卡，目標 ${goalKcal}，已攝取 ${foodKcal}`
-        : `剩餘 ${centerValue} 千卡，目標 ${goalKcal}，已攝取 ${foodKcal}`;
+        ? `${t('diary.over')} ${centerValue} kcal · ${t('diary.goal')} ${goalKcal}`
+        : `${t('diary.remainingLabel')} ${centerValue} kcal · ${t('diary.goal')} ${goalKcal}`;
 
   return (
     <View style={styles.wrap}>
@@ -54,23 +65,29 @@ export function DailyNutritionHero({ consumed, goal, exerciseKcal = 0 }: Props) 
       >
         <Text style={styles.remainingLabel}>{centerLabel}</Text>
         <Text style={styles.heroNumber}>{centerValue.toLocaleString('zh-TW')}</Text>
-        <Text style={styles.caloriesLabel}>{zhTW.diary.calories}</Text>
+        <Text style={styles.caloriesLabel}>{t('diary.calories')}</Text>
       </ProgressRing>
 
-      <View style={styles.statRow}>
-        <StatCol label={zhTW.diary.goal} value={goalKcal != null ? String(goalKcal) : '—'} />
-        <StatCol label={zhTW.diary.food} value={String(foodKcal)} />
-        <StatCol label={zhTW.diary.exercise} value={String(displayKcal(exerciseKcal))} />
+      <View style={styles.macroRow}>
+        <MacroMiniRing
+          label={t('diary.macros.carbs')}
+          consumed={displayMacroG(consumed.carbs_g)}
+          goal={goal?.carbsG ?? null}
+          color={theme.colors.carbs}
+        />
+        <MacroMiniRing
+          label={t('diary.macros.fat')}
+          consumed={displayMacroG(consumed.fat_g)}
+          goal={goal?.fatG ?? null}
+          color={theme.colors.fat}
+        />
+        <MacroMiniRing
+          label={t('diary.macros.protein')}
+          consumed={displayMacroG(consumed.protein_g)}
+          goal={goal?.proteinG ?? null}
+          color={theme.colors.protein}
+        />
       </View>
-    </View>
-  );
-}
-
-function StatCol({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.statCol}>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
 }
@@ -101,25 +118,11 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: theme.colors.textMuted,
   },
-  statRow: {
+  macroRow: {
     flexDirection: 'row',
     width: '100%',
     marginTop: theme.space.lg,
     paddingHorizontal: theme.space.md,
-  },
-  statCol: { flex: 1, alignItems: 'center' },
-  statValue: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: theme.colors.heroNumber,
-    fontVariant: ['tabular-nums'],
-  },
-  statLabel: {
-    marginTop: 4,
-    fontSize: theme.font.macroLabel,
-    fontWeight: '600',
-    letterSpacing: 0.8,
-    color: theme.colors.textMuted,
-    textTransform: 'uppercase',
+    gap: theme.space.sm,
   },
 });

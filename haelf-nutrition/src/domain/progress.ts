@@ -111,7 +111,7 @@ export function splitTrendLineIndices(
 }
 
 /** One continuous line through all recorded points (skips null slots on the axis). */
-export function recordedTrendLineIndices(points: { value: number | null }[]): number[][] {
+export function recordedTrendLineIndices<T extends { value: number | null }>(points: T[]): number[][] {
   const indices: number[] = [];
   for (let i = 0; i < points.length; i++) {
     if (points[i].value != null) indices.push(i);

@@ -19,6 +19,12 @@ import {
 } from '../db/repositories/preferences';
 import { isWebPreview } from '../services/secureStore';
 import { translate } from '../i18n';
+import { usePedometerSync } from '../hooks/usePedometerSync';
+
+function PedometerSyncBridge() {
+  usePedometerSync();
+  return null;
+}
 
 type AppContextValue = {
   ready: boolean;
@@ -202,7 +208,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ]
   );
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={value}>
+      <PedometerSyncBridge />
+      {children}
+    </AppContext.Provider>
+  );
 }
 
 export function useApp(): AppContextValue {

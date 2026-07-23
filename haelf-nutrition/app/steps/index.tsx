@@ -1,22 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, AppState, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useApp } from '@/src/context/AppContext';
 import { getDailyStepTotal, upsertDailyStepTotal } from '@/src/db/repositories/steps';
 import { normalizeSteps } from '@/src/domain/steps';
 import type { DailyStepTotal } from '@/src/domain/types';
-import {
-  getPedometerStatus,
-  startPedometerWatch,
-  syncPedometerToday,
-} from '@/src/services/pedometer';
+import { getPedometerStatus, syncPedometerToday } from '@/src/services/pedometer';
 import { Field, MfpButton, SectionTitle } from '@/src/components/ui';
 import { theme } from '@/src/theme';
 
 export default function StepsScreen() {
   const {
     selectedDate,
-    todayLocalDate,
     preferences,
     updatePreferences,
     bumpRefresh,
@@ -30,34 +25,10 @@ export default function StepsScreen() {
   const load = useCallback(async () => {
     setTotal(await getDailyStepTotal(selectedDate));
   }, [selectedDate]);
-  useFocusEffect(useCallback(() => { void load(); }, [load, refreshToken]));
-
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
   useEffect(() => {
-    if (preferences.stepMode !== 'pedometer' || selectedDate !== todayLocalDate) return;
-    let disposed = false;
-    let subscription: { remove: () => void } | null = null;
-    void startPedometerWatch(selectedDate, (next) => {
-      if (!disposed) {
-        setTotal(next);
-        bumpRefresh();
-      }
-    }).then((nextSubscription) => {
-      if (disposed) nextSubscription?.remove();
-      else subscription = nextSubscription;
-    });
-    const appState = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        void syncPedometerToday(selectedDate).then((next) => {
-          if (!disposed && next) setTotal(next);
-        });
-      }
-    });
-    return () => {
-      disposed = true;
-      subscription?.remove();
-      appState.remove();
-    };
-  }, [bumpRefresh, preferences.stepMode, selectedDate, todayLocalDate]);
+    void load();
+  }, [load, refreshToken]);
 
   const requestPedometer = async () => {
     const permission = await getPedometerStatus(true);

@@ -120,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSyncRunner(null);
       return;
     }
-    setSyncRunner(() => syncNow);
+    setSyncRunner(syncNow);
     return () => setSyncRunner(null);
   }, [session?.user, syncNow]);
 
